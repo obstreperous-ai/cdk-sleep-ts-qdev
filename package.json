@@ -1,5 +1,5 @@
 {
-  "name": "cdk-base",
+  "name": "cdk-sleep-ts-qdev",
   "version": "0.1.0",
   "scripts": {
     "build": "tsc",
