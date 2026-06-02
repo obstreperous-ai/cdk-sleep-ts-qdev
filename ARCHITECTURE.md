@@ -42,6 +42,52 @@ flowchart TD
         A[User/Application]
     end
     
+    subgraph Ingestion ["Ingestion Layer - IMPLEMENTED"]
+        B[Input S3 Bucket<br/>SleepAudioInputBucket<br/>✓ Encrypted & Versioned<br/>✓ EventBridge Enabled]
+    end
+    
+    subgraph EventRouting ["Event Routing Layer - IMPLEMENTED"]
+        C[EventBridge Rule<br/>AudioUploadedRule<br/>✓ Matches Object Created Events]
+    end
+    
+    subgraph Processing ["Processing Layer - PLANNED"]
+        D[AWS Step Functions<br/>Coming in Issue #4]
+        D1[Processing Lambdas<br/>Coming in Issue #4]
+    end
+    
+    subgraph Storage ["Storage Layer - PARTIALLY IMPLEMENTED"]
+        E[Output S3 Bucket<br/>SleepAudioOutputBucket<br/>✓ Encrypted & Versioned]
+        F[DynamoDB Table<br/>Coming in Future Issue]
+    end
+    
+    A -->|1. Upload Audio/Text| B
+    B -->|2. S3 Event| C
+    C -.->|3. Will Trigger| D
+    D -.->|Process| D1
+    D1 -.->|Store| E
+    D1 -.->|Metadata| F
+    
+    style B fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
+    style C fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
+    style E fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
+    style D fill:#D3D3D3,stroke:#696969,stroke-width:2px,stroke-dasharray: 5 5,color:#000
+    style D1 fill:#D3D3D3,stroke:#696969,stroke-width:2px,stroke-dasharray: 5 5,color:#000
+    style F fill:#D3D3D3,stroke:#696969,stroke-width:2px,stroke-dasharray: 5 5,color:#000
+```
+
+**Legend:**
+- ✓ Green boxes with solid borders: Implemented in Issue #3
+- Gray boxes with dashed borders: Planned for future issues
+- Solid arrows: Active data flow
+- Dashed arrows: Planned data flow
+
+## Full System Architecture (Future Vision)
+```mermaid
+flowchart TD
+    subgraph Users
+        A[User/Application]
+    end
+    
     subgraph Ingestion ["Ingestion Layer"]
         B[Input S3 Bucket<br/>Raw Audio Files]
     end
@@ -116,9 +162,42 @@ flowchart TD
     style K fill:#FF4F8B,stroke:#232F3E,stroke-width:2px,color:#000
 ```
 
-## System Components
+## Implementation Status
 
-### 1. Ingestion Layer
+### ✅ Completed (Issue #3)
+
+#### Input S3 Bucket (`SleepAudioInputBucket`)
+**Status**: ✅ Implemented
+
+The input bucket is now fully configured and operational:
+- **Encryption**: Server-side encryption using S3-managed keys (AES-256)
+- **Versioning**: Enabled to track all file uploads
+- **EventBridge Integration**: All S3 `Object Created` events are sent to EventBridge
+- **Public Access**: Completely blocked via `BlockPublicAccess.BLOCK_ALL`
+- **SSL Enforcement**: Bucket policy requires SSL/TLS for all connections
+- **Removal Policy**: Set to `RETAIN` to prevent accidental data loss
+
+#### Output S3 Bucket (`SleepAudioOutputBucket`)
+**Status**: ✅ Implemented
+
+The output bucket is configured to store processed audio files:
+- **Encryption**: Server-side encryption using S3-managed keys (AES-256)
+- **Versioning**: Enabled to protect against accidental overwrites
+- **Public Access**: Completely blocked via `BlockPublicAccess.BLOCK_ALL`
+- **SSL Enforcement**: Bucket policy requires SSL/TLS for all connections
+- **Removal Policy**: Set to `RETAIN` to prevent accidental data loss
+
+#### EventBridge Rule (`AudioUploadedRule`)
+**Status**: ✅ Implemented
+
+The EventBridge rule is configured to capture S3 events:
+- **Event Pattern**: Matches all S3 `Object Created` events
+- **State**: Enabled and ready to route events
+- **Target**: Not yet configured (will be added in Issue #4 with Step Functions)
+
+---
+
+## System Components (Detailed Specifications)
 
 #### Input S3 Bucket
 
@@ -1054,5 +1133,5 @@ Update this document when:
 ---
 
 **Document Version**: 2.0  
-**Last Updated**: 2024-01-01  
-**Next Review**: After Issue #3 (S3 + EventBridge Implementation)
+**Last Updated**: [Current Date] (Issue #3 Complete)  
+**Next Review**: After Issue #4 (Step Functions State Machine + Polly Integration)
