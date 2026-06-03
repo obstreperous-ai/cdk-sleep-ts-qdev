@@ -2,11 +2,16 @@ import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as events from 'aws-cdk-lib/aws-events';
+import * as targets from 'aws-cdk-lib/aws-events-targets';
+import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
+import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
+import * as logs from 'aws-cdk-lib/aws-logs';
 
 export class CdkBaseStack extends cdk.Stack {
   public readonly inputBucket: s3.Bucket;
   public readonly outputBucket: s3.Bucket;
   public readonly eventRule: events.Rule;
+  public readonly stateMachine: sfn.StateMachine;
 
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
@@ -31,6 +36,47 @@ export class CdkBaseStack extends cdk.Stack {
     });
 
     // EventBridge Rule - triggers on S3 object creation events
+    // CloudWatch Log Group for Step Functions execution logs
+    const stateMachineLogGroup = new logs.LogGroup(this, 'StateMachineLogGroup', {
+      logGroupName: `/aws/vendedlogs/states/${this.stackName}-SleepAudioPipeline`,
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    // Step Functions State Machine with Polly Integration
+    // Define the Polly task with placeholder parameters
+    const synthesizeSpeech = new tasks.CallAwsService(this, 'SynthesizeSpeech', {
+      service: 'polly',
+      action: 'synthesizeSpeech',
+      parameters: {
+        Text: sfn.JsonPath.stringAt('$.text'),
+        OutputFormat: 'mp3',
+        VoiceId: sfn.JsonPath.stringAt('$.voiceId'),
+        Engine: 'neural',
+      },
+      iamResources: ['*'],
+      resultPath: '$.pollyResult',
+    });
+
+    // Create state machine definition with basic flow
+    const definition = synthesizeSpeech;
+
+    // Create the state machine with CloudWatch logging
+    this.stateMachine = new sfn.StateMachine(this, 'SleepAudioPipelineStateMachine', {
+      definitionBody: sfn.DefinitionBody.fromChainable(definition),
+      stateMachineType: sfn.StateMachineType.STANDARD,
+      logs: {
+        destination: stateMachineLogGroup,
+        level: sfn.LogLevel.ALL,
+        includeExecutionData: true,
+      },
+      tracingEnabled: false, // Can be enabled in production
+    });
+
+    // Grant state machine permissions to read from input bucket and write to output bucket
+    this.inputBucket.grantRead(this.stateMachine);
+    this.outputBucket.grantWrite(this.stateMachine);
+
     this.eventRule = new events.Rule(this, 'AudioUploadedRule', {
       description: 'Triggers when audio files are uploaded to the input bucket',
       eventPattern: {
@@ -41,6 +87,21 @@ export class CdkBaseStack extends cdk.Stack {
     });
 
     // CFN Outputs for easy access to bucket names
+    // Add Step Functions state machine as target for EventBridge rule
+    this.eventRule.addTarget(
+      new targets.SfnStateMachine(this.stateMachine, {
+        input: events.RuleTargetInput.fromObject({
+          bucket: events.EventField.fromPath('$.detail.bucket.name'),
+          key: events.EventField.fromPath('$.detail.object.key'),
+          size: events.EventField.fromPath('$.detail.object.size'),
+          etag: events.EventField.fromPath('$.detail.object.etag'),
+          // Placeholder parameters for Polly
+          text: 'Welcome to the sleep audio pipeline. This is a placeholder text for testing.',
+          voiceId: 'Joanna',
+        }),
+      })
+    );
+
     new cdk.CfnOutput(this, 'InputBucketName', {
       value: this.inputBucket.bucketName,
       description: 'Name of the input S3 bucket for raw audio files',
@@ -51,6 +112,12 @@ export class CdkBaseStack extends cdk.Stack {
       value: this.outputBucket.bucketName,
       description: 'Name of the output S3 bucket for processed audio files',
       exportName: `${this.stackName}-OutputBucket`,
+    });
+
+    new cdk.CfnOutput(this, 'StateMachineArn', {
+      value: this.stateMachine.stateMachineArn,
+      description: 'ARN of the Step Functions state machine',
+      exportName: `${this.stackName}-StateMachine`,
     });
   }
 }
