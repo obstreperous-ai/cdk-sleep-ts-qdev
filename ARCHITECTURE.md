@@ -50,9 +50,9 @@ flowchart TD
         C[EventBridge Rule<br/>AudioUploadedRule<br/>✓ Matches Object Created Events]
     end
     
-    subgraph Processing ["Processing Layer - PLANNED"]
-        D[AWS Step Functions<br/>Coming in Issue #4]
-        D1[Processing Lambdas<br/>Coming in Issue #4]
+    subgraph Processing ["Orchestration Layer - IMPLEMENTED"]
+        D[AWS Step Functions<br/>SleepAudioPipelineStateMachine<br/>✓ CloudWatch Logging Enabled]
+        D1[Amazon Polly Task<br/>✓ Text-to-Speech Integration]
     end
     
     subgraph Storage ["Storage Layer - PARTIALLY IMPLEMENTED"]
@@ -62,19 +62,19 @@ flowchart TD
     
     A -->|1. Upload Audio/Text| B
     B -->|2. S3 Event| C
-    C -.->|3. Will Trigger| D
-    D -.->|Process| D1
+    C -->|3. Triggers Execution| D
+    D -->|4. Synthesize Speech| D1
     D1 -.->|Store| E
     D1 -.->|Metadata| F
     
     style B fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
     style C fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
+    style D fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
+    style D1 fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
     style E fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
-    style D fill:#D3D3D3,stroke:#696969,stroke-width:2px,stroke-dasharray: 5 5,color:#000
-    style D1 fill:#D3D3D3,stroke:#696969,stroke-width:2px,stroke-dasharray: 5 5,color:#000
     style F fill:#D3D3D3,stroke:#696969,stroke-width:2px,stroke-dasharray: 5 5,color:#000
 ```
-
+- ✓ Green boxes with solid borders: Implemented (Issue #3 & #4)
 **Legend:**
 - ✓ Green boxes with solid borders: Implemented in Issue #3
 - Gray boxes with dashed borders: Planned for future issues
@@ -163,7 +163,49 @@ flowchart TD
 ```
 
 ## Implementation Status
+### ✅ Completed (Issue #4)
 
+#### Step Functions State Machine (`SleepAudioPipelineStateMachine`)
+**Status**: ✅ Implemented
+
+The Step Functions state machine orchestrates the sleep audio processing workflow:
+- **State Machine Type**: STANDARD (for long-running workflows with audit history)
+- **CloudWatch Logging**: Enabled with ALL log level and execution data included
+- **Log Group**: `/aws/vendedlogs/states/{StackName}-SleepAudioPipeline`
+- **Log Retention**: 30 days
+- **IAM Permissions**: Least-privilege access to:
+  - Amazon Polly (synthesizeSpeech)
+  - S3 input bucket (read)
+  - S3 output bucket (write)
+  - CloudWatch Logs (write)
+
+**Current Workflow**:
+```
+Start → Polly SynthesizeSpeech Task → End
+```
+
+The state machine currently implements a minimal skeleton with a single Polly task. Future iterations will expand this to include:
+- Input validation
+- Choice states for routing different file types
+- Parallel processing branches
+- Error handling and retry logic
+- DynamoDB metadata storage
+- SNS notifications
+
+#### Amazon Polly Integration
+**Status**: ✅ Implemented (Minimal)
+
+Polly is integrated as a Task state using the `CallAwsService` integration:
+- **Service**: polly
+- **Action**: synthesizeSpeech
+- **Parameters**: Configured via state machine input
+  - Text: Dynamic from input (`$.text`)
+  - OutputFormat: mp3
+  - VoiceId: Dynamic from input (`$.voiceId`)
+  - Engine: neural (for high-quality voices)
+- **Result Path**: `$.pollyResult` (stores Polly response in state)
+
+### ✅ Completed (Issue #3 & #4)
 ### ✅ Completed (Issue #3)
 
 #### Input S3 Bucket (`SleepAudioInputBucket`)
@@ -193,7 +235,16 @@ The output bucket is configured to store processed audio files:
 The EventBridge rule is configured to capture S3 events:
 - **Event Pattern**: Matches all S3 `Object Created` events
 - **State**: Enabled and ready to route events
-- **Target**: Not yet configured (will be added in Issue #4 with Step Functions)
+- **Target**: Step Functions state machine (`SleepAudioPipelineStateMachine`)
+- **Input Transformation**: Extracts S3 event details and passes to state machine:
+  - `bucket`: S3 bucket name from event
+  - `key`: S3 object key from event
+  - `size`: Object size from event
+  - `etag`: Object ETag from event
+  - `text`: Placeholder text for Polly synthesis
+  - `voiceId`: Voice configuration (currently "Joanna")
+
+**IAM Role**: EventBridge automatically creates an IAM role with permission to start state machine executions.
 
 ---
 
@@ -1132,6 +1183,6 @@ Update this document when:
 
 ---
 
-**Document Version**: 2.0  
-**Last Updated**: [Current Date] (Issue #3 Complete)  
+**Last Updated**: [Current Date] (Issue #4 Complete)  
+**Next Review**: After Issue #5 (DynamoDB Metadata Table + State Machine Input/Output Handling)
 **Next Review**: After Issue #4 (Step Functions State Machine + Polly Integration)

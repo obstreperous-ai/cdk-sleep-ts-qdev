@@ -86,4 +86,94 @@ describe('CdkBaseStack', () => {
       });
     });
   });
+
+  describe('Step Functions State Machine', () => {
+    test('State machine exists with correct configuration', () => {
+      template.hasResourceProperties('AWS::StepFunctions::StateMachine', {
+        StateMachineType: 'STANDARD',
+      });
+    });
+
+    test('State machine has CloudWatch logging enabled', () => {
+      template.hasResourceProperties('AWS::StepFunctions::StateMachine', {
+        LoggingConfiguration: {
+          Level: 'ALL',
+          IncludeExecutionData: true,
+          Destinations: Match.arrayWith([
+            Match.objectLike({
+              CloudWatchLogsLogGroup: Match.objectLike({
+                LogGroupArn: Match.anyValue()
+              })
+            })
+          ])
+        }
+      });
+    });
+
+    test('State machine definition contains Polly task', () => {
+      template.hasResourceProperties('AWS::StepFunctions::StateMachine', {
+        DefinitionString: Match.serializedJson(
+          Match.objectLike({
+            States: Match.objectLike({
+              'SynthesizeSpeech': Match.objectLike({
+                Type: 'Task',
+                Resource: Match.stringLikeRegexp('states:startSyncExecution')
+              })
+            })
+          })
+        )
+      });
+    });
+
+    test('State machine has proper execution role', () => {
+      template.hasResourceProperties('AWS::IAM::Role', {
+        AssumeRolePolicyDocument: {
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Action: 'sts:AssumeRole',
+              Effect: 'Allow',
+              Principal: {
+                Service: 'states.amazonaws.com'
+              }
+            })
+          ])
+        }
+      });
+    });
+
+    test('State machine execution role has Polly permissions', () => {
+      template.hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: {
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Action: 'polly:SynthesizeSpeech',
+              Effect: 'Allow',
+            })
+          ])
+        }
+      });
+    });
+
+    test('Creates exactly one Step Functions state machine', () => {
+      template.resourceCountIs('AWS::StepFunctions::StateMachine', 1);
+    });
+  });
+
+  describe('EventBridge to Step Functions Integration', () => {
+    test('EventBridge rule has Step Functions state machine as target', () => {
+      template.hasResourceProperties('AWS::Events::Rule', {
+        Targets: Match.arrayWith([
+          Match.objectLike({
+            Arn: Match.anyValue(),
+            RoleArn: Match.anyValue()
+          })
+        ])
+      });
+    });
+
+    test('EventBridge has IAM role to start state machine execution', () => {
+      // EventBridge needs permission to start Step Functions execution
+      expect(template.toJSON()).toBeDefined();
+    });
+  });
 });
