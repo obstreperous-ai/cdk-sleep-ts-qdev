@@ -7,12 +7,14 @@ import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
 import * as logs from 'aws-cdk-lib/aws-logs';
 
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 export class CdkBaseStack extends cdk.Stack {
   public readonly inputBucket: s3.Bucket;
   public readonly outputBucket: s3.Bucket;
   public readonly eventRule: events.Rule;
   public readonly stateMachine: sfn.StateMachine;
 
+  public readonly metadataTable: dynamodb.Table;
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
@@ -36,7 +38,22 @@ export class CdkBaseStack extends cdk.Stack {
     });
 
     // EventBridge Rule - triggers on S3 object creation events
-    // CloudWatch Log Group for Step Functions execution logs
+    // DynamoDB Table - stores audio pipeline metadata
+    this.metadataTable = new dynamodb.Table(this, 'SleepAudioMetadataTable', {
+      partitionKey: {
+        name: 'audioId',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'createdAt',
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
     const stateMachineLogGroup = new logs.LogGroup(this, 'StateMachineLogGroup', {
       logGroupName: `/aws/vendedlogs/states/${this.stackName}-SleepAudioPipeline`,
       retention: logs.RetentionDays.ONE_MONTH,
@@ -44,8 +61,27 @@ export class CdkBaseStack extends cdk.Stack {
     });
 
     // Step Functions State Machine with Polly Integration
-    // Define the Polly task with placeholder parameters
-    const synthesizeSpeech = new tasks.CallAwsService(this, 'SynthesizeSpeech', {
+    // Step Functions State Machine with DynamoDB and Polly Integration
+    
+    // Task 1: Write initial metadata to DynamoDB (status: PROCESSING)
+    const writeInitialMetadata = new tasks.DynamoPutItem(this, 'WriteInitialMetadata', {
+      table: this.metadataTable,
+      item: {
+        audioId: tasks.DynamoAttributeValue.fromString(sfn.JsonPath.stringAt('$.executionId')),
+        createdAt: tasks.DynamoAttributeValue.fromString(sfn.JsonPath.stringAt('$.timestamp')),
+        status: tasks.DynamoAttributeValue.fromString('PROCESSING'),
+        inputBucket: tasks.DynamoAttributeValue.fromString(sfn.JsonPath.stringAt('$.bucket')),
+        inputKey: tasks.DynamoAttributeValue.fromString(sfn.JsonPath.stringAt('$.key')),
+        size: tasks.DynamoAttributeValue.numberFromString(sfn.JsonPath.stringAt('$.size')),
+        etag: tasks.DynamoAttributeValue.fromString(sfn.JsonPath.stringAt('$.etag')),
+        text: tasks.DynamoAttributeValue.fromString(sfn.JsonPath.stringAt('$.text')),
+        voiceId: tasks.DynamoAttributeValue.fromString(sfn.JsonPath.stringAt('$.voiceId')),
+        updatedAt: tasks.DynamoAttributeValue.fromString(sfn.JsonPath.stringAt('$.timestamp')),
+      },
+      resultPath: '$.dynamoResult',
+    });
+
+    // Task 2: Polly task with placeholder parameters
       service: 'polly',
       action: 'synthesizeSpeech',
       parameters: {

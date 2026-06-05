@@ -176,4 +176,99 @@ describe('CdkBaseStack', () => {
       expect(template.toJSON()).toBeDefined();
     });
   });
+
+  describe('DynamoDB Table', () => {
+    test('DynamoDB table exists with correct configuration', () => {
+      template.hasResourceProperties('AWS::DynamoDB::Table', {
+        BillingMode: 'PAY_PER_REQUEST',
+        SSESpecification: {
+          SSEEnabled: true
+        },
+        PointInTimeRecoverySpecification: {
+          PointInTimeRecoveryEnabled: true
+        }
+      });
+    });
+
+    test('DynamoDB table has correct key schema', () => {
+      template.hasResourceProperties('AWS::DynamoDB::Table', {
+        KeySchema: [
+          {
+            AttributeName: 'audioId',
+            KeyType: 'HASH'
+          },
+          {
+            AttributeName: 'createdAt',
+            KeyType: 'RANGE'
+          }
+        ],
+        AttributeDefinitions: Match.arrayWith([
+          {
+            AttributeName: 'audioId',
+            AttributeType: 'S'
+          },
+          {
+            AttributeName: 'createdAt',
+            AttributeType: 'S'
+          }
+        ])
+      });
+    });
+
+    test('Creates exactly one DynamoDB table', () => {
+      template.resourceCountIs('AWS::DynamoDB::Table', 1);
+    });
+  });
+
+  describe('State Machine DynamoDB Integration', () => {
+    test('State machine definition contains DynamoDB PutItem task', () => {
+      template.hasResourceProperties('AWS::StepFunctions::StateMachine', {
+        DefinitionString: Match.serializedJson(
+          Match.objectLike({
+            States: Match.objectLike({
+              'WriteInitialMetadata': Match.objectLike({
+                Type: 'Task',
+                Resource: Match.stringLikeRegexp('dynamodb:putItem')
+              })
+            })
+          })
+        )
+      });
+    });
+
+    test('State machine definition contains DynamoDB UpdateItem task', () => {
+      template.hasResourceProperties('AWS::StepFunctions::StateMachine', {
+        DefinitionString: Match.serializedJson(
+          Match.objectLike({
+            States: Match.objectLike({
+              'UpdateMetadataCompleted': Match.objectLike({
+                Type: 'Task',
+                Resource: Match.stringLikeRegexp('dynamodb:updateItem')
+              })
+            })
+          })
+        )
+      });
+    });
+
+    test('State machine execution role has DynamoDB permissions', () => {
+      template.hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: {
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Action: Match.arrayWith([
+                'dynamodb:PutItem',
+                'dynamodb:UpdateItem'
+              ]),
+              Effect: 'Allow',
+            })
+          ])
+        }
+      });
+    });
+  });
+
+  test('Snapshot test of synthesized stack', () => {
+    expect(template.toJSON()).toMatchSnapshot();
+  });
 });

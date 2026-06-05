@@ -73,7 +73,7 @@ flowchart TD
     style D1 fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
     style E fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
     style F fill:#D3D3D3,stroke:#696969,stroke-width:2px,stroke-dasharray: 5 5,color:#000
-```
+    style F fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
 - ✓ Green boxes with solid borders: Implemented (Issue #3 & #4)
 **Legend:**
 - ✓ Green boxes with solid borders: Implemented in Issue #3
