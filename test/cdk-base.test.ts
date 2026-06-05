@@ -268,6 +268,140 @@ describe('CdkBaseStack', () => {
     });
   });
 
+  describe('SNS Topics', () => {
+    test('Creates exactly two SNS topics', () => {
+      template.resourceCountIs('AWS::SNS::Topic', 2);
+    });
+
+    test('SNS topics are encrypted', () => {
+      template.hasResourceProperties('AWS::SNS::Topic', {
+        KmsMasterKeyId: Match.anyValue()
+      });
+    });
+
+    test('Completed notification topic exists', () => {
+      template.hasResourceProperties('AWS::SNS::Topic', {
+        DisplayName: Match.stringLikeRegexp('.*Completed.*')
+      });
+    });
+
+    test('Failed notification topic exists', () => {
+      template.hasResourceProperties('AWS::SNS::Topic', {
+        DisplayName: Match.stringLikeRegexp('.*Failed.*')
+      });
+    });
+  });
+
+  describe('State Machine Error Handling and Notifications', () => {
+    test('State machine definition contains success notification task', () => {
+      template.hasResourceProperties('AWS::StepFunctions::StateMachine', {
+        DefinitionString: Match.serializedJson(
+          Match.objectLike({
+            States: Match.objectLike({
+              'PublishSuccessNotification': Match.objectLike({
+                Type: 'Task',
+                Resource: Match.stringLikeRegexp('sns:publish')
+              })
+            })
+          })
+        )
+      });
+    });
+
+    test('State machine definition contains failure notification task', () => {
+      template.hasResourceProperties('AWS::StepFunctions::StateMachine', {
+        DefinitionString: Match.serializedJson(
+          Match.objectLike({
+            States: Match.objectLike({
+              'PublishFailureNotification': Match.objectLike({
+                Type: 'Task',
+                Resource: Match.stringLikeRegexp('sns:publish')
+              })
+            })
+          })
+        )
+      });
+    });
+
+    test('State machine definition contains error handling with Catch', () => {
+      template.hasResourceProperties('AWS::StepFunctions::StateMachine', {
+        DefinitionString: Match.serializedJson(
+          Match.objectLike({
+            States: Match.objectLike({
+              'SynthesizeSpeech': Match.objectLike({
+                Type: 'Task',
+                Catch: Match.arrayWith([
+                  Match.objectLike({
+                    ErrorEquals: Match.arrayWith(['States.ALL'])
+                  })
+                ])
+              })
+            })
+          })
+        )
+      });
+    });
+
+    test('State machine definition contains UpdateMetadataCompleted task', () => {
+      template.hasResourceProperties('AWS::StepFunctions::StateMachine', {
+        DefinitionString: Match.serializedJson(
+          Match.objectLike({
+            States: Match.objectLike({
+              'UpdateMetadataCompleted': Match.objectLike({
+                Type: 'Task',
+                Resource: Match.stringLikeRegexp('dynamodb:updateItem')
+              })
+            })
+          })
+        )
+      });
+    });
+
+    test('State machine definition contains UpdateMetadataFailed task', () => {
+      template.hasResourceProperties('AWS::StepFunctions::StateMachine', {
+        DefinitionString: Match.serializedJson(
+          Match.objectLike({
+            States: Match.objectLike({
+              'UpdateMetadataFailed': Match.objectLike({
+                Type: 'Task',
+                Resource: Match.stringLikeRegexp('dynamodb:updateItem')
+              })
+            })
+          })
+        )
+      });
+    });
+  });
+
+  describe('State Machine IAM Permissions for SNS', () => {
+    test('State machine execution role has SNS publish permissions', () => {
+      template.hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: {
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Action: 'sns:Publish',
+              Effect: 'Allow',
+            })
+          ])
+        }
+      });
+    });
+
+    test('State machine execution role has least-privilege SNS permissions to specific topics', () => {
+      template.hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: {
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Action: 'sns:Publish',
+              Effect: 'Allow',
+              Resource: Match.anyValue()
+            })
+          ])
+        }
+      });
+    });
+  });
+
   test('Snapshot test of synthesized stack', () => {
     expect(template.toJSON()).toMatchSnapshot();
   });
