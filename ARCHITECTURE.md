@@ -52,36 +52,40 @@ flowchart TD
     
     subgraph Processing ["Orchestration Layer - IMPLEMENTED"]
         D[AWS Step Functions<br/>SleepAudioPipelineStateMachine<br/>✓ CloudWatch Logging Enabled]
+        D0[Lambda Function<br/>SleepAudioProcessorFunction<br/>✓ Metadata Processing]
         D1[Amazon Polly Task<br/>✓ Text-to-Speech Integration]
     end
     
     subgraph Storage ["Storage Layer - PARTIALLY IMPLEMENTED"]
+    subgraph Storage ["Storage Layer - IMPLEMENTED"]
         E[Output S3 Bucket<br/>SleepAudioOutputBucket<br/>✓ Encrypted & Versioned]
-        F[DynamoDB Table<br/>Coming in Future Issue]
+        F[DynamoDB Table<br/>SleepAudioMetadataTable<br/>✓ Metadata & Status Tracking]
     end
     
     A -->|1. Upload Audio/Text| B
     B -->|2. S3 Event| C
     C -->|3. Triggers Execution| D
-    D -->|4. Synthesize Speech| D1
+    D -->|4a. Process Metadata| D0
+    D0 -->|4b. Synthesize Speech| D1
     D1 -.->|Store| E
-    D1 -.->|Metadata| F
+    D -->|5. Write Metadata| F
+    D0 -.->|Read/Write| F
     
     style B fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
     style C fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
     style D fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
+    style D0 fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
     style D1 fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
     style E fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
-    style F fill:#D3D3D3,stroke:#696969,stroke-width:2px,stroke-dasharray: 5 5,color:#000
     style F fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
-- ✓ Green boxes with solid borders: Implemented (Issue #3 & #4)
+
 **Legend:**
-- ✓ Green boxes with solid borders: Implemented in Issue #3
-- Gray boxes with dashed borders: Planned for future issues
+- ✓ Green boxes with solid borders: Implemented (Issues #3, #4, #5, #6, #7)
 - Solid arrows: Active data flow
 - Dashed arrows: Planned data flow
 
 ## Full System Architecture (Future Vision)
+
 ```mermaid
 flowchart TD
     subgraph Users
@@ -101,7 +105,7 @@ flowchart TD
         D[AWS Step Functions<br/>Workflow State Machine]
         D1[Validation Lambda<br/>Format & Quality Check]
         D2[Amazon Polly<br/>Text-to-Speech]
-        D3[Amazon Bedrock<br/>AI Audio Enhancement]
+        D4[Audio Processor Lambda<br/>Metadata & Validation]
         D4[Metadata Lambda<br/>Extract Audio Properties]
     end
     
@@ -163,8 +167,35 @@ flowchart TD
 ```
 
 ## Implementation Status
-### ✅ Completed (Issue #4)
 
+### ✅ Completed (Issue #7)
+
+#### Lambda Function (`SleepAudioProcessorFunction`)
+**Status**: ✅ Implemented
+
+The Lambda function serves as a placeholder for future audio processing, metadata enrichment, and validation logic:
+- **Runtime**: Node.js 20.x (matching TypeScript project)
+- **Handler**: audio-processor.handler
+- **Memory**: 512 MB
+- **Timeout**: 60 seconds
+- **Environment Variables**: 
+  - `TABLE_NAME`: DynamoDB table name for metadata access
+- **IAM Permissions**: Least-privilege access to:
+  - DynamoDB (GetItem, UpdateItem on metadata table)
+  - CloudWatch Logs (CreateLogGroup, CreateLogStream, PutLogEvents)
+
+**Current Functionality**:
+- Receives S3 event details and execution metadata from Step Functions
+- Validates required input fields (executionId, bucket, key)
+- Logs processing details for debugging
+- Returns enriched metadata response with processing status
+
+**Future Enhancements**:
+- Audio format validation (codec, bitrate, sample rate)
+- Quality checks and content analysis
+- Metadata extraction using audio analysis libraries
+
+### ✅ Completed (Issue #4)
 #### Step Functions State Machine (`SleepAudioPipelineStateMachine`)
 **Status**: ✅ Implemented
 
@@ -181,11 +212,15 @@ The Step Functions state machine orchestrates the sleep audio processing workflo
 
 **Current Workflow**:
 ```
-Start → Polly SynthesizeSpeech Task → End
+Start → WriteInitialMetadata (DynamoDB) 
+     → ProcessAudioMetadata (Lambda) 
+     → SynthesizeSpeech (Polly) 
+     → UpdateMetadataCompleted (DynamoDB)
+     → PublishSuccessNotification (SNS)
+     → End
 ```
 
 The state machine currently implements a minimal skeleton with a single Polly task. Future iterations will expand this to include:
-- Input validation
 - Choice states for routing different file types
 - Parallel processing branches
 - Error handling and retry logic
@@ -410,13 +445,18 @@ The EventBridge rule is configured to capture S3 events:
 #### Processing Lambda Functions
 
 **Validation Lambda**
+**Audio Processor Lambda** (`SleepAudioProcessorFunction`)
 - Runtime: Node.js 20.x or Python 3.12
-- Memory: 512 MB
+- Memory: 512 MB (configurable)
 - Timeout: 60 seconds
-- Purpose: Validate audio file format, size, and basic properties
-- Dependencies: ffprobe (via Lambda Layer) for audio analysis
+- Purpose: Process audio metadata, perform validation, and enrich data
+- Current: Logs input, validates fields, returns metadata
+- Future: Audio format validation, quality checks using ffprobe/ffmpeg (via Lambda Layer)
+- Environment Variables: DynamoDB table name
+- IAM Permissions: DynamoDB read/write, CloudWatch Logs
 
 **Metadata Extraction Lambda**
+**Future Enhancement**: Metadata Extraction Lambda
 - Runtime: Node.js 20.x or Python 3.12
 - Memory: 1024 MB
 - Timeout: 120 seconds
@@ -1183,6 +1223,5 @@ Update this document when:
 
 ---
 
-**Last Updated**: [Current Date] (Issue #4 Complete)  
-**Next Review**: After Issue #5 (DynamoDB Metadata Table + State Machine Input/Output Handling)
-**Next Review**: After Issue #4 (Step Functions State Machine + Polly Integration)
+**Last Updated**: [Current Date] (Issue #7 Complete)  
+**Next Review**: After Issue #8 (Complete Pipeline Wiring, Input Validation & Basic End-to-End Flow)

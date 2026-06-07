@@ -405,4 +405,97 @@ describe('CdkBaseStack', () => {
   test('Snapshot test of synthesized stack', () => {
     expect(template.toJSON()).toMatchSnapshot();
   });
+
+  describe('Lambda Function - Audio Processor', () => {
+    test('Lambda function exists with correct runtime', () => {
+      template.hasResourceProperties('AWS::Lambda::Function', {
+        Runtime: 'nodejs20.x',
+        Handler: 'audio-processor.handler'
+      });
+    });
+
+    test('Lambda function has DynamoDB table name environment variable', () => {
+      template.hasResourceProperties('AWS::Lambda::Function', {
+        Environment: {
+          Variables: {
+            TABLE_NAME: Match.anyValue()
+          }
+        }
+      });
+    });
+
+    test('Lambda function has proper timeout and memory configuration', () => {
+      template.hasResourceProperties('AWS::Lambda::Function', {
+        Timeout: 60,
+        MemorySize: Match.anyValue()
+      });
+    });
+
+    test('Lambda execution role has DynamoDB permissions', () => {
+      template.hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: {
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Action: Match.arrayWith([
+                'dynamodb:GetItem',
+                'dynamodb:UpdateItem'
+              ]),
+              Effect: 'Allow',
+            })
+          ])
+        }
+      });
+    });
+
+    test('Lambda execution role has CloudWatch Logs permissions', () => {
+      template.hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: {
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Action: Match.arrayWith([
+                'logs:CreateLogGroup',
+                'logs:CreateLogStream',
+                'logs:PutLogEvents'
+              ]),
+              Effect: 'Allow',
+            })
+          ])
+        }
+      });
+    });
+
+    test('Creates exactly one Lambda function', () => {
+      template.resourceCountIs('AWS::Lambda::Function', 1);
+    });
+  });
+
+  describe('State Machine Lambda Integration', () => {
+    test('State machine definition contains Lambda invocation task', () => {
+      template.hasResourceProperties('AWS::StepFunctions::StateMachine', {
+        DefinitionString: Match.serializedJson(
+          Match.objectLike({
+            States: Match.objectLike({
+              'ProcessAudioMetadata': Match.objectLike({
+                Type: 'Task',
+                Resource: Match.stringLikeRegexp('lambda:invoke')
+              })
+            })
+          })
+        )
+      });
+    });
+
+    test('State machine execution role can invoke Lambda function', () => {
+      template.hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: {
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Action: 'lambda:InvokeFunction',
+              Effect: 'Allow',
+            })
+          ])
+        }
+      });
+    });
+  });
 });
