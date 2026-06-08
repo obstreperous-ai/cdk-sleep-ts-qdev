@@ -1,11 +1,22 @@
 import * as cdk from 'aws-cdk-lib';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import * as CdkBase from '../lib/cdk-base-stack';
+import { EnvironmentConfig } from '../lib/cdk-base-stack';
 
 describe('CdkBaseStack', () => {
   let app: cdk.App;
   let stack: CdkBase.CdkBaseStack;
   let template: Template;
+  
+  const defaultEnvConfig: EnvironmentConfig = {
+    environment: 'dev',
+    account: '123456789012',
+    region: 'us-east-1',
+    logRetentionDays: 7,
+    tracingEnabled: false,
+    inputBucketName: 'sleep-audio-input-dev',
+    outputBucketName: 'sleep-audio-output-dev'
+  };
 
   beforeEach(() => {
     app = new cdk.App();
@@ -614,6 +625,155 @@ describe('CdkBaseStack', () => {
             }
           });
         });
+      });
+    });
+  });
+
+  describe('Issue #9: Environment Configuration & Multi-Environment Support', () => {
+    describe('Environment-Specific Configuration', () => {
+      test('Stack accepts environment configuration', () => {
+        const envConfig: EnvironmentConfig = {
+          environment: 'dev',
+          account: '123456789012',
+          region: 'us-east-1',
+          logRetentionDays: 7,
+          tracingEnabled: false,
+          inputBucketName: 'sleep-audio-input-dev',
+          outputBucketName: 'sleep-audio-output-dev'
+        };
+        
+        const testStack = new CdkBase.CdkBaseStack(app, 'TestEnvStack', {
+          envConfig,
+          env: { account: envConfig.account, region: envConfig.region }
+        });
+        
+        expect(testStack).toBeDefined();
+        const testTemplate = Template.fromStack(testStack);
+        expect(testTemplate.toJSON()).toBeDefined();
+      });
+
+      test('Dev environment has 7-day log retention', () => {
+        const devConfig: EnvironmentConfig = {
+          environment: 'dev',
+          account: '123456789012',
+          region: 'us-east-1',
+          logRetentionDays: 7,
+          tracingEnabled: false,
+          inputBucketName: 'sleep-audio-input-dev',
+          outputBucketName: 'sleep-audio-output-dev'
+        };
+        
+        const devStack = new CdkBase.CdkBaseStack(app, 'DevStack', {
+          envConfig: devConfig,
+          env: { account: devConfig.account, region: devConfig.region }
+        });
+        
+        const devTemplate = Template.fromStack(devStack);
+        devTemplate.hasResourceProperties('AWS::Logs::LogGroup', {
+          RetentionInDays: 7
+        });
+      });
+
+      test('Prod environment has 30-day log retention', () => {
+        const prodConfig: EnvironmentConfig = {
+          environment: 'prod',
+          account: '333333333333',
+          region: 'us-east-1',
+          logRetentionDays: 30,
+          tracingEnabled: true,
+          inputBucketName: 'sleep-audio-input-prod',
+          outputBucketName: 'sleep-audio-output-prod'
+        };
+        
+        const prodStack = new CdkBase.CdkBaseStack(app, 'ProdStack', {
+          envConfig: prodConfig,
+          env: { account: prodConfig.account, region: prodConfig.region }
+        });
+        
+        const prodTemplate = Template.fromStack(prodStack);
+        prodTemplate.hasResourceProperties('AWS::Logs::LogGroup', {
+          RetentionInDays: 30
+        });
+      });
+
+      test('Prod environment has X-Ray tracing enabled', () => {
+        const prodConfig: EnvironmentConfig = {
+          environment: 'prod',
+          account: '333333333333',
+          region: 'us-east-1',
+          logRetentionDays: 30,
+          tracingEnabled: true,
+          inputBucketName: 'sleep-audio-input-prod',
+          outputBucketName: 'sleep-audio-output-prod'
+        };
+        
+        const prodStack = new CdkBase.CdkBaseStack(app, 'ProdStack', {
+          envConfig: prodConfig,
+          env: { account: prodConfig.account, region: prodConfig.region }
+        });
+        
+        const prodTemplate = Template.fromStack(prodStack);
+        prodTemplate.hasResourceProperties('AWS::StepFunctions::StateMachine', {
+          TracingConfiguration: {
+            Enabled: true
+          }
+        });
+      });
+
+      test('Dev environment has X-Ray tracing disabled', () => {
+        const devConfig: EnvironmentConfig = {
+          environment: 'dev',
+          account: '123456789012',
+          region: 'us-east-1',
+          logRetentionDays: 7,
+          tracingEnabled: false,
+          inputBucketName: 'sleep-audio-input-dev',
+          outputBucketName: 'sleep-audio-output-dev'
+        };
+        
+        const devStack = new CdkBase.CdkBaseStack(app, 'DevStack', {
+          envConfig: devConfig,
+          env: { account: devConfig.account, region: devConfig.region }
+        });
+        
+        const devTemplate = Template.fromStack(devStack);
+        devTemplate.hasResourceProperties('AWS::StepFunctions::StateMachine', {
+          TracingConfiguration: Match.absent()
+        });
+      });
+
+      test('Environment-specific bucket names are applied', () => {
+        const stageConfig: EnvironmentConfig = {
+          environment: 'stage',
+          account: '222222222222',
+          region: 'us-east-1',
+          logRetentionDays: 14,
+          tracingEnabled: true,
+          inputBucketName: 'sleep-audio-input-stage',
+          outputBucketName: 'sleep-audio-output-stage'
+        };
+        
+        const stageStack = new CdkBase.CdkBaseStack(app, 'StageStack', {
+          envConfig: stageConfig,
+          env: { account: stageConfig.account, region: stageConfig.region }
+        });
+        
+        expect(stageStack.inputBucket.bucketName).toContain('stage');
+        expect(stageStack.outputBucket.bucketName).toContain('stage');
+      });
+    });
+
+    describe('Backward Compatibility', () => {
+      test('Stack works without environment configuration (backward compatible)', () => {
+        const legacyStack = new CdkBase.CdkBaseStack(app, 'LegacyStack');
+        expect(legacyStack).toBeDefined();
+        
+        const legacyTemplate = Template.fromStack(legacyStack);
+        expect(legacyTemplate.toJSON()).toBeDefined();
+        
+        // Should default to dev-like settings
+        legacyTemplate.resourceCountIs('AWS::S3::Bucket', 2);
+        legacyTemplate.resourceCountIs('AWS::StepFunctions::StateMachine', 1);
       });
     });
   });

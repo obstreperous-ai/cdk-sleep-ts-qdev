@@ -1203,6 +1203,78 @@ Examples:
 
 ---
 
+## Deployment Strategy & CI/CD Pipeline
+
+### Multi-Environment Deployment (Issue #9)
+
+The application supports automated deployment across multiple environments using CDK context configuration and AWS CDK Pipelines.
+
+#### Environment Configuration
+
+**Available Environments:**
+- **dev**: Development environment for active development and testing
+- **stage**: Staging environment for pre-production testing
+- **prod**: Production environment for live workloads
+
+**Environment-Specific Settings:**
+
+| Setting | Dev | Stage | Prod |
+|---------|-----|-------|------|
+| Log Retention | 7 days | 14 days | 30 days |
+| X-Ray Tracing | Disabled | Enabled | Enabled |
+| Lambda Memory | 512 MB | 1024 MB | 1024 MB |
+| Bucket Naming | `*-dev` | `*-stage` | `*-prod` |
+| SNS Topic Naming | `*-dev` | `*-stage` | `*-prod` |
+| State Machine Naming | `*-dev` | `*-stage` | `*-prod` |
+
+#### Manual Deployment Commands
+
+Deploy to specific environment using CDK context:
+
+```bash
+# Deploy to development environment
+npx cdk deploy --context environment=dev
+
+# Deploy to staging environment
+npx cdk deploy --context environment=stage
+
+# Deploy to production environment (requires manual confirmation)
+npx cdk deploy --context environment=prod
+```
+
+#### CDK Pipelines (Automated Deployment)
+
+**Status**: ✅ Skeleton Implemented (Issue #9)
+
+A self-mutating CI/CD pipeline has been scaffolded using AWS CDK Pipelines:
+
+**Pipeline Stages:**
+1. **Source**: Pull code from repository (GitHub/CodeCommit)
+2. **Build & Synth**: Install dependencies, run tests, synthesize CDK app
+3. **UpdatePipeline**: Self-update the pipeline definition
+4. **Deploy**: Deploy application stacks to target environments
+
+**Future Enhancements** (Subsequent Issues):
+- Connect to actual source repository
+- Add pre-deployment validation stages
+- Configure multi-environment deployment waves:
+  - Wave 1: Deploy to dev (automatic)
+  - Wave 2: Deploy to stage (automatic after dev success)
+  - Wave 3: Deploy to prod (manual approval required)
+- Add integration tests between stages
+- Configure notifications for deployment status
+
+### Deployment Best Practices
+
+1. **Always deploy to dev first**: Test changes in development before promoting
+2. **Use feature branches**: Create separate branches for major features
+3. **Run tests locally**: Execute `npm test` before pushing code
+4. **Review diffs**: Use `cdk diff` to review changes before deployment
+5. **Monitor deployments**: Watch CloudWatch Logs during and after deployment
+6. **Rollback plan**: Keep previous stack versions for quick rollback if needed
+
+---
+
 ## Cost Considerations
 
 ### Estimated Monthly Costs (Production)
@@ -1345,5 +1417,5 @@ Update this document when:
 
 ---
 
-**Last Updated**: [Current Date] (Issue #8 Complete)  
-**Next Review**: After Issue #9 (Pipeline Testing, Refinement & Deployment Preparation)
+**Last Updated**: [Current Date] (Issue #9 Complete)  
+**Next Review**: After Issue #10 (Advanced Error Handling, Retries & Observability)

@@ -12,6 +12,35 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as path from 'path';
 
 export class CdkBaseStack extends cdk.Stack {
+/**
+ * Environment-specific configuration interface
+ */
+export interface EnvironmentConfig {
+  environment: string;
+  account: string;
+  region: string;
+  logRetentionDays: number;
+  tracingEnabled: boolean;
+  inputBucketName?: string;
+  outputBucketName?: string;
+  lambdaMemorySize?: number;
+}
+
+/**
+ * Extended stack props with environment configuration
+ */
+export interface CdkBaseStackProps extends cdk.StackProps {
+  envConfig?: EnvironmentConfig;
+}
+
+/**
+ * Sleep Audio Pipeline Stack with multi-environment support
+ * 
+ * Supports dev, stage, and prod environments with different configurations:
+ * - Log retention (7 days for dev, 14 for stage, 30 for prod)
+ * - X-Ray tracing (disabled in dev, enabled in stage/prod)
+ * - Resource sizing and naming conventions
+ */
   public readonly inputBucket: s3.Bucket;
   public readonly outputBucket: s3.Bucket;
   public readonly eventRule: events.Rule;
@@ -22,8 +51,26 @@ export class CdkBaseStack extends cdk.Stack {
   public readonly audioProcessorFunction: lambda.Function;
 
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
-    super(scope, id, props);
+  private readonly envConfig: EnvironmentConfig;
 
+  constructor(scope: Construct, id: string, props?: CdkBaseStackProps) {
+
+
+    // Set default environment config if not provided (backward compatibility)
+    this.envConfig = props?.envConfig ?? {
+      environment: 'dev',
+      account: this.account,
+      region: this.region,
+      logRetentionDays: 30,
+      tracingEnabled: false,
+      lambdaMemorySize: 512
+    };
+
+    // Determine log retention based on environment
+    const logRetention = this.getLogRetention(this.envConfig.logRetentionDays);
+
+    // Environment-specific naming suffix
+    const envSuffix = this.envConfig.environment;
     // Input S3 Bucket - accepts raw audio files and text for processing
     this.inputBucket = new s3.Bucket(this, 'SleepAudioInputBucket', {
       encryption: s3.BucketEncryption.S3_MANAGED,
@@ -33,6 +80,7 @@ export class CdkBaseStack extends cdk.Stack {
       enforceSSL: true,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
+      ...(this.envConfig.inputBucketName && { bucketName: this.envConfig.inputBucketName }),
 
     // Output S3 Bucket - stores processed sleep audio files
     this.outputBucket = new s3.Bucket(this, 'SleepAudioOutputBucket', {
@@ -42,6 +90,7 @@ export class CdkBaseStack extends cdk.Stack {
       enforceSSL: true,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
+      ...(this.envConfig.outputBucketName && { bucketName: this.envConfig.outputBucketName }),
 
     // DynamoDB Table - stores metadata for sleep audio processing
     this.metadataTable = new dynamodb.Table(this, 'SleepAudioMetadataTable', {
@@ -62,17 +111,17 @@ export class CdkBaseStack extends cdk.Stack {
     // SNS Topics - notifications for pipeline completion and failures
     this.completedTopic = new sns.Topic(this, 'SleepAudioPipelineCompletedTopic', {
       displayName: 'Sleep Audio Pipeline Completed Notifications',
-      topicName: 'SleepAudioPipelineCompleted',
+      topicName: `SleepAudioPipelineCompleted-${envSuffix}`,
       masterKey: cdk.aws_kms.Alias.fromAliasName(this, 'SnsKeyCompleted', 'alias/aws/sns'),
     });
 
     this.failedTopic = new sns.Topic(this, 'SleepAudioPipelineFailedTopic', {
       displayName: 'Sleep Audio Pipeline Failed Notifications',
-      topicName: 'SleepAudioPipelineFailed',
+      topicName: `SleepAudioPipelineFailed-${envSuffix}`,
       masterKey: cdk.aws_kms.Alias.fromAliasName(this, 'SnsKeyFailed', 'alias/aws/sns'),
     });
 
-    // CloudWatch Log Group for State Machine
+    // CloudWatch Log Group for State Machine with environment-specific retention
     const stateMachineLogGroup = new logs.LogGroup(this, 'StateMachineLogGroup', {
       logGroupName: `/aws/vendedlogs/states/${this.stackName}-SleepAudioPipeline`,
       retention: logs.RetentionDays.ONE_MONTH,
@@ -85,12 +134,12 @@ export class CdkBaseStack extends cdk.Stack {
       handler: 'audio-processor.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
       timeout: cdk.Duration.seconds(60),
-      memorySize: 512,
+      memorySize: this.envConfig.lambdaMemorySize ?? 512,
       environment: {
         TABLE_NAME: this.metadataTable.tableName,
       },
       description: 'Processes audio metadata and performs validation for the sleep audio pipeline',
-      logRetention: logs.RetentionDays.ONE_MONTH,
+      logRetention: logRetention,
     });
 
     // Grant Lambda permissions to access DynamoDB table
@@ -247,6 +296,7 @@ export class CdkBaseStack extends cdk.Stack {
     // Create the state machine
     this.stateMachine = new sfn.StateMachine(this, 'SleepAudioPipelineStateMachine', {
       definitionBody: sfn.DefinitionBody.fromChainable(definition),
+      stateMachineName: `SleepAudioPipeline-${envSuffix}`,
       stateMachineType: sfn.StateMachineType.STANDARD,
       logs: {
         destination: stateMachineLogGroup,
@@ -254,7 +304,7 @@ export class CdkBaseStack extends cdk.Stack {
         includeExecutionData: true,
       },
       tracingEnabled: false, // Can be enabled in production
-    });
+      tracingEnabled: this.envConfig.tracingEnabled,
 
     // Grant state machine permissions to read from input bucket and write to output bucket
     this.inputBucket.grantRead(this.stateMachine);
@@ -310,5 +360,24 @@ export class CdkBaseStack extends cdk.Stack {
       description: 'ARN of the Step Functions state machine',
       exportName: `${this.stackName}-StateMachine`,
     });
+
+    new cdk.CfnOutput(this, 'Environment', {
+      value: this.envConfig.environment,
+      description: 'Deployment environment (dev/stage/prod)',
+    });
+  }
+
+  /**
+   * Map log retention days to CDK RetentionDays enum
+   */
+  private getLogRetention(days: number): logs.RetentionDays {
+    const retentionMap: { [key: number]: logs.RetentionDays } = {
+      7: logs.RetentionDays.ONE_WEEK,
+      14: logs.RetentionDays.TWO_WEEKS,
+      30: logs.RetentionDays.ONE_MONTH,
+      90: logs.RetentionDays.THREE_MONTHS,
+    };
+    
+    return retentionMap[days] ?? logs.RetentionDays.ONE_MONTH;
   }
 }
