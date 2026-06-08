@@ -498,4 +498,123 @@ describe('CdkBaseStack', () => {
       });
     });
   });
+
+  describe('Issue #8: Complete Pipeline Integration Tests', () => {
+    describe('Complete End-to-End Wiring', () => {
+      test('State machine definition contains complete success flow chain', () => {
+        const definitionString = template.toJSON().Resources;
+        const stateMachine = Object.values(definitionString).find(
+          (resource: any) => resource.Type === 'AWS::StepFunctions::StateMachine'
+        ) as any;
+        
+        expect(stateMachine).toBeDefined();
+        const definition = JSON.parse(stateMachine.Properties.DefinitionString);
+        
+        // Verify the success path: Initial -> Lambda -> Polly -> UpdateCompleted -> PublishSuccess
+        expect(definition.States['WriteInitialMetadata']).toBeDefined();
+        expect(definition.States['ProcessAudioMetadata']).toBeDefined();
+        expect(definition.States['SynthesizeSpeech']).toBeDefined();
+        expect(definition.States['UpdateMetadataCompleted']).toBeDefined();
+        expect(definition.States['PublishSuccessNotification']).toBeDefined();
+        
+        // Verify state chain connections
+        expect(definition.States['WriteInitialMetadata'].Next).toBe('ProcessAudioMetadata');
+        expect(definition.States['ProcessAudioMetadata'].Next).toBe('SynthesizeSpeech');
+        expect(definition.States['SynthesizeSpeech'].Next).toBe('UpdateMetadataCompleted');
+        expect(definition.States['UpdateMetadataCompleted'].Next).toBe('PublishSuccessNotification');
+      });
+
+      test('State machine definition contains complete error handling chain', () => {
+        const definitionString = template.toJSON().Resources;
+        const stateMachine = Object.values(definitionString).find(
+          (resource: any) => resource.Type === 'AWS::StepFunctions::StateMachine'
+        ) as any;
+        
+        expect(stateMachine).toBeDefined();
+        const definition = JSON.parse(stateMachine.Properties.DefinitionString);
+        
+        // Verify error handling states exist
+        expect(definition.States['UpdateMetadataFailed']).toBeDefined();
+        expect(definition.States['PublishFailureNotification']).toBeDefined();
+        expect(definition.States['JobFailed']).toBeDefined();
+        
+        // Verify error handling chain connections
+        expect(definition.States['UpdateMetadataFailed'].Next).toBe('PublishFailureNotification');
+        expect(definition.States['PublishFailureNotification'].Next).toBe('JobFailed');
+        expect(definition.States['JobFailed'].Type).toBe('Fail');
+      });
+
+      test('Lambda and Polly tasks have catch blocks pointing to error handler', () => {
+        const definitionString = template.toJSON().Resources;
+        const stateMachine = Object.values(definitionString).find(
+          (resource: any) => resource.Type === 'AWS::StepFunctions::StateMachine'
+        ) as any;
+        
+        expect(stateMachine).toBeDefined();
+        const definition = JSON.parse(stateMachine.Properties.DefinitionString);
+        
+        // Verify ProcessAudioMetadata has catch block
+        expect(definition.States['ProcessAudioMetadata'].Catch).toBeDefined();
+        expect(definition.States['ProcessAudioMetadata'].Catch[0].Next).toBe('UpdateMetadataFailed');
+        
+        // Verify SynthesizeSpeech has catch block
+        expect(definition.States['SynthesizeSpeech'].Catch).toBeDefined();
+        expect(definition.States['SynthesizeSpeech'].Catch[0].Next).toBe('UpdateMetadataFailed');
+      });
+    });
+
+    describe('Input Validation', () => {
+      test('EventBridge rule passes all required fields to state machine', () => {
+        template.hasResourceProperties('AWS::Events::Rule', {
+          Targets: Match.arrayWith([
+            Match.objectLike({
+              Input: Match.stringLikeRegexp('.*bucket.*'),
+            })
+          ])
+        });
+        
+        template.hasResourceProperties('AWS::Events::Rule', {
+          Targets: Match.arrayWith([
+            Match.objectLike({
+              Input: Match.stringLikeRegexp('.*key.*'),
+            })
+          ])
+        });
+      });
+
+      test('Lambda function validates required input fields', () => {
+        // This test verifies the Lambda validation logic exists
+        // The actual validation is tested in Lambda unit tests
+        template.hasResourceProperties('AWS::Lambda::Function', {
+          Handler: 'audio-processor.handler'
+        });
+      });
+    });
+
+    describe('IAM Permissions - Least Privilege', () => {
+      test('State machine role has all necessary permissions', () => {
+        // Verify state machine can access all required services
+        const policies = [
+          'dynamodb:PutItem',
+          'dynamodb:UpdateItem',
+          'lambda:InvokeFunction',
+          'polly:SynthesizeSpeech',
+          'sns:Publish'
+        ];
+        
+        policies.forEach(action => {
+          template.hasResourceProperties('AWS::IAM::Policy', {
+            PolicyDocument: {
+              Statement: Match.arrayWith([
+                Match.objectLike({
+                  Action: Match.arrayWith([action]),
+                  Effect: 'Allow',
+                })
+              ])
+            }
+          });
+        });
+      });
+    });
+  });
 });

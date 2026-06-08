@@ -36,53 +36,124 @@ The Sleep Audio Pipeline processes audio files through the following stages:
 
 ## Architecture Diagram
 
+### Complete Integrated Pipeline (Issue #8 - Current Implementation)
+
 ```mermaid
-flowchart TD
-    subgraph Users
-        A[User/Application]
+flowchart LR
+    %% User Layer
+    User[User/Application<br/>Uploads Files]
+    
+    %% Ingestion Layer
+    InputBucket[S3 Input Bucket<br/>✓ EventBridge Enabled<br/>✓ Encrypted & Versioned]
+    
+    %% Event Routing
+    EventRule[EventBridge Rule<br/>AudioUploadedRule<br/>✓ S3 Object Created Filter]
+    
+    %% Orchestration - State Machine
+    subgraph StateMachine["Step Functions State Machine<br/>SleepAudioPipelineStateMachine"]
+        direction TB
+        SM1[WriteInitialMetadata<br/>DynamoDB PutItem<br/>Status: PROCESSING]
+        SM2[ProcessAudioMetadata<br/>Lambda Invoke<br/>✓ Input Validation<br/>✓ File Extension Check]
+        SM3[SynthesizeSpeech<br/>Polly Task<br/>✓ Neural Voice]
+        SM4[UpdateMetadataCompleted<br/>DynamoDB UpdateItem<br/>Status: COMPLETED]
+        SM5[PublishSuccessNotification<br/>SNS Publish]
+        
+        %% Error Handling Path
+        SME1[UpdateMetadataFailed<br/>DynamoDB UpdateItem<br/>Status: FAILED]
+        SME2[PublishFailureNotification<br/>SNS Publish]
+        SME3[JobFailed<br/>Fail State]
+        
+        SM1 --> SM2
+        SM2 --> SM3
+        SM3 --> SM4
+        SM4 --> SM5
+        
+        SM2 -.->|Error Catch| SME1
+        SM3 -.->|Error Catch| SME1
+        SME1 --> SME2
+        SME2 --> SME3
     end
     
-    subgraph Ingestion ["Ingestion Layer - IMPLEMENTED"]
-        B[Input S3 Bucket<br/>SleepAudioInputBucket<br/>✓ Encrypted & Versioned<br/>✓ EventBridge Enabled]
-    end
+    %% Lambda Function
+    Lambda[Lambda Function<br/>SleepAudioProcessorFunction<br/>✓ Validates Required Fields<br/>✓ Checks File Extensions<br/>✓ Validates File Size]
     
-    subgraph EventRouting ["Event Routing Layer - IMPLEMENTED"]
-        C[EventBridge Rule<br/>AudioUploadedRule<br/>✓ Matches Object Created Events]
-    end
+    %% Storage Layer
+    MetadataTable[DynamoDB Table<br/>SleepAudioMetadataTable<br/>✓ Tracks Processing Status<br/>✓ Point-in-Time Recovery]
+    OutputBucket[S3 Output Bucket<br/>✓ Encrypted & Versioned]
     
-    subgraph Processing ["Orchestration Layer - IMPLEMENTED"]
-        D[AWS Step Functions<br/>SleepAudioPipelineStateMachine<br/>✓ CloudWatch Logging Enabled]
-        D0[Lambda Function<br/>SleepAudioProcessorFunction<br/>✓ Metadata Processing]
-        D1[Amazon Polly Task<br/>✓ Text-to-Speech Integration]
-    end
+    %% Notification Layer
+    CompletedTopic[SNS Topic<br/>SleepAudioPipelineCompleted<br/>✓ Success Notifications]
+    FailedTopic[SNS Topic<br/>SleepAudioPipelineFailed<br/>✓ Failure Notifications]
     
-    subgraph Storage ["Storage Layer - PARTIALLY IMPLEMENTED"]
-    subgraph Storage ["Storage Layer - IMPLEMENTED"]
-        E[Output S3 Bucket<br/>SleepAudioOutputBucket<br/>✓ Encrypted & Versioned]
-        F[DynamoDB Table<br/>SleepAudioMetadataTable<br/>✓ Metadata & Status Tracking]
-    end
+    %% Main Flow
+    User -->|1. Upload Audio/Text| InputBucket
+    InputBucket -->|2. S3 Event| EventRule
+    EventRule -->|3. Start Execution| StateMachine
     
-    A -->|1. Upload Audio/Text| B
-    B -->|2. S3 Event| C
-    C -->|3. Triggers Execution| D
-    D -->|4a. Process Metadata| D0
-    D0 -->|4b. Synthesize Speech| D1
-    D1 -.->|Store| E
-    D -->|5. Write Metadata| F
-    D0 -.->|Read/Write| F
+    %% State Machine Interactions
+    SM1 -.->|Write| MetadataTable
+    SM2 -->|Invoke| Lambda
+    Lambda -.->|Read/Write| MetadataTable
+    SM3 -.->|Output Audio| OutputBucket
+    SM4 -.->|Update| MetadataTable
+    SM5 -->|Publish| CompletedTopic
+    SME1 -.->|Update| MetadataTable
+    SME2 -->|Publish| FailedTopic
     
-    style B fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
-    style C fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
-    style D fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
-    style D0 fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
-    style D1 fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
-    style E fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
-    style F fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
+    %% Styling
+    style InputBucket fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
+    style EventRule fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
+    style StateMachine fill:#E8F5E9,stroke:#228B22,stroke-width:3px,color:#000
+    style Lambda fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
+    style MetadataTable fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
+    style OutputBucket fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
+    style CompletedTopic fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
+    style FailedTopic fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
+    style SM1 fill:#FFF9C4,stroke:#F57C00,stroke-width:2px,color:#000
+    style SM2 fill:#FFF9C4,stroke:#F57C00,stroke-width:2px,color:#000
+    style SM3 fill:#FFF9C4,stroke:#F57C00,stroke-width:2px,color:#000
+    style SM4 fill:#FFF9C4,stroke:#F57C00,stroke-width:2px,color:#000
+    style SM5 fill:#FFF9C4,stroke:#F57C00,stroke-width:2px,color:#000
+    style SME1 fill:#FFCDD2,stroke:#C62828,stroke-width:2px,color:#000
+    style SME2 fill:#FFCDD2,stroke:#C62828,stroke-width:2px,color:#000
+    style SME3 fill:#FFCDD2,stroke:#C62828,stroke-width:2px,color:#000
 
 **Legend:**
-- ✓ Green boxes with solid borders: Implemented (Issues #3, #4, #5, #6, #7)
+- ✓ Green boxes with solid borders: Fully Implemented and Wired (Issues #3-#8)
+- Yellow boxes: State Machine Success Path
+- Red boxes: State Machine Error Handling Path
 - Solid arrows: Active data flow
 - Dashed arrows: Planned data flow
+
+### End-to-End Data Flow (Issue #8)
+
+#### Success Path:
+1. **User uploads file** to Input S3 Bucket (e.g., `audio.mp3` or `text.txt`)
+2. **S3 generates event** → EventBridge captures it
+3. **EventBridge Rule triggers** Step Functions state machine execution with S3 details
+4. **WriteInitialMetadata** → DynamoDB record created (status: `PROCESSING`)
+5. **ProcessAudioMetadata** → Lambda validates:
+   - Required fields (executionId, bucket, key)
+   - File extension (`.mp3`, `.wav`, `.m4a`, `.flac`, `.ogg`, `.txt`)
+   - File size (< 100 MB)
+6. **SynthesizeSpeech** → Polly converts text to audio (neural voice)
+7. **UpdateMetadataCompleted** → DynamoDB updated (status: `COMPLETED`)
+8. **PublishSuccessNotification** → SNS notification sent to success topic
+
+#### Error Path:
+If Lambda validation fails or Polly errors occur:
+1. **Error caught** by Catch block
+2. **UpdateMetadataFailed** → DynamoDB updated (status: `FAILED`, error message stored)
+3. **PublishFailureNotification** → SNS notification sent to failure topic
+4. **JobFailed** → Execution terminates with failure status
+
+### Input Validation (Issue #8)
+
+**Lambda Validation Logic:**
+- **Required Fields:** Validates presence of `executionId`, `bucket`, and `key`
+- **File Extension:** Checks against whitelist: `.mp3`, `.wav`, `.m4a`, `.flac`, `.ogg`, `.txt`
+- **File Size:** Validates file size is under 100 MB limit
+- **Error Handling:** Throws descriptive errors that are caught by state machine
 
 ## Full System Architecture (Future Vision)
 
@@ -196,12 +267,44 @@ The Lambda function serves as a placeholder for future audio processing, metadat
 - Metadata extraction using audio analysis libraries
 
 ### ✅ Completed (Issue #4)
+### ✅ Completed (Issue #8)
+
+#### Complete Pipeline Integration & Input Validation
+**Status**: ✅ Implemented
+
+The complete basic pipeline is now fully wired and operational:
+
+**Pipeline Components Integrated:**
+1. **S3 Input Bucket** → **EventBridge Rule** → **Step Functions State Machine**
+2. **State Machine Orchestration:**
+   - WriteInitialMetadata (DynamoDB PutItem)
+   - ProcessAudioMetadata (Lambda with validation)
+   - SynthesizeSpeech (Polly integration)
+   - UpdateMetadataCompleted (DynamoDB UpdateItem)
+   - PublishSuccessNotification (SNS)
+3. **Error Handling Chain:**
+   - UpdateMetadataFailed (DynamoDB UpdateItem)
+   - PublishFailureNotification (SNS)
+   - JobFailed (Fail state)
+
+**Input Validation:**
+- Lambda function validates all required input fields
+- File extension whitelist enforcement (audio and text files)
+- File size validation (100 MB limit)
+- Descriptive error messages for validation failures
+
+**End-to-End Flow:**
+- Success path: S3 → EventBridge → State Machine → DynamoDB → Polly → SNS (success)
+- Failure path: Catch errors → DynamoDB (FAILED) → SNS (failure) → Fail state
+- All IAM permissions configured with least-privilege principle
+- CloudWatch logging enabled for full observability
+
 #### Step Functions State Machine (`SleepAudioPipelineStateMachine`)
 **Status**: ✅ Implemented
 
 The Step Functions state machine orchestrates the sleep audio processing workflow:
 - **State Machine Type**: STANDARD (for long-running workflows with audit history)
-- **CloudWatch Logging**: Enabled with ALL log level and execution data included
+The Lambda function now includes:
 - **Log Group**: `/aws/vendedlogs/states/{StackName}-SleepAudioPipeline`
 - **Log Retention**: 30 days
 - **IAM Permissions**: Least-privilege access to:
@@ -215,8 +318,11 @@ The Step Functions state machine orchestrates the sleep audio processing workflo
 Start → WriteInitialMetadata (DynamoDB) 
      → ProcessAudioMetadata (Lambda) 
      → SynthesizeSpeech (Polly) 
+- Validates file extensions against supported formats
+- Validates file size (< 100 MB)
      → UpdateMetadataCompleted (DynamoDB)
      → PublishSuccessNotification (SNS)
+- Throws descriptive errors for invalid inputs
      → End
 ```
 
@@ -239,11 +345,14 @@ Polly is integrated as a Task state using the `CallAwsService` integration:
   - VoiceId: Dynamic from input (`$.voiceId`)
   - Engine: neural (for high-quality voices)
 - **Result Path**: `$.pollyResult` (stores Polly response in state)
+  - Lambda (invokeFunction)
+  - DynamoDB (putItem, updateItem)
+  - SNS (publish to both topics)
 
 ### ✅ Completed (Issue #3 & #4)
 ### ✅ Completed (Issue #3)
 
-#### Input S3 Bucket (`SleepAudioInputBucket`)
+**Complete Workflow (Issue #8)**:
 **Status**: ✅ Implemented
 
 The input bucket is now fully configured and operational:
@@ -251,17 +360,27 @@ The input bucket is now fully configured and operational:
 - **Versioning**: Enabled to track all file uploads
 - **EventBridge Integration**: All S3 `Object Created` events are sent to EventBridge
 - **Public Access**: Completely blocked via `BlockPublicAccess.BLOCK_ALL`
+
+Error Path:
+  → UpdateMetadataFailed (DynamoDB)
+  → PublishFailureNotification (SNS)
+  → JobFailed (Fail)
 - **SSL Enforcement**: Bucket policy requires SSL/TLS for all connections
 - **Removal Policy**: Set to `RETAIN` to prevent accidental data loss
+**Error Handling:**
+- Lambda validation errors caught and routed to failure path
+- Polly errors caught and routed to failure path
+- All errors logged with descriptive messages
+- DynamoDB updated with error details
+- SNS notifications sent for all failures
 
+Future iterations will expand this to include:
 #### Output S3 Bucket (`SleepAudioOutputBucket`)
 **Status**: ✅ Implemented
-
-The output bucket is configured to store processed audio files:
-- **Encryption**: Server-side encryption using S3-managed keys (AES-256)
+- Retry logic with exponential backoff
 - **Versioning**: Enabled to protect against accidental overwrites
 - **Public Access**: Completely blocked via `BlockPublicAccess.BLOCK_ALL`
-- **SSL Enforcement**: Bucket policy requires SSL/TLS for all connections
+**Status**: ✅ Implemented
 - **Removal Policy**: Set to `RETAIN` to prevent accidental data loss
 
 #### EventBridge Rule (`AudioUploadedRule`)
@@ -272,6 +391,7 @@ The EventBridge rule is configured to capture S3 events:
 - **State**: Enabled and ready to route events
 - **Target**: Step Functions state machine (`SleepAudioPipelineStateMachine`)
 - **Input Transformation**: Extracts S3 event details and passes to state machine:
+- **Error Handling**: Catch block routes errors to failure path
   - `bucket`: S3 bucket name from event
   - `key`: S3 object key from event
   - `size`: Object size from event
@@ -311,6 +431,8 @@ The EventBridge rule is configured to capture S3 events:
 **Naming Convention**: `raw/{user_id}/{timestamp}_{filename}.{ext}`
 
 ---
+  - `executionId`: Unique execution ID from event
+  - `timestamp`: Event timestamp
 
 ### 2. Event Routing Layer
 
@@ -1223,5 +1345,5 @@ Update this document when:
 
 ---
 
-**Last Updated**: [Current Date] (Issue #7 Complete)  
-**Next Review**: After Issue #8 (Complete Pipeline Wiring, Input Validation & Basic End-to-End Flow)
+**Last Updated**: [Current Date] (Issue #8 Complete)  
+**Next Review**: After Issue #9 (Pipeline Testing, Refinement & Deployment Preparation)

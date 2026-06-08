@@ -43,9 +43,9 @@ export class CdkBaseStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
-    // EventBridge Rule - triggers on S3 object creation events
-      partitionKey: {
+    // DynamoDB Table - stores metadata for sleep audio processing
     this.metadataTable = new dynamodb.Table(this, 'SleepAudioMetadataTable', {
+      partitionKey: {
         name: 'audioId',
         type: dynamodb.AttributeType.STRING,
       },
@@ -59,7 +59,7 @@ export class CdkBaseStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
-    const stateMachineLogGroup = new logs.LogGroup(this, 'StateMachineLogGroup', {
+    // SNS Topics - notifications for pipeline completion and failures
     this.completedTopic = new sns.Topic(this, 'SleepAudioPipelineCompletedTopic', {
       displayName: 'Sleep Audio Pipeline Completed Notifications',
       topicName: 'SleepAudioPipelineCompleted',
@@ -73,13 +73,12 @@ export class CdkBaseStack extends cdk.Stack {
     });
 
     // CloudWatch Log Group for State Machine
-      logGroupName: `/aws/vendedlogs/states/${this.stackName}-SleepAudioPipeline`,
     const stateMachineLogGroup = new logs.LogGroup(this, 'StateMachineLogGroup', {
+      logGroupName: `/aws/vendedlogs/states/${this.stackName}-SleepAudioPipeline`,
       retention: logs.RetentionDays.ONE_MONTH,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    // Step Functions State Machine with Polly Integration
     // Lambda Function - Audio Processor
     this.audioProcessorFunction = new lambda.Function(this, 'SleepAudioProcessorFunction', {
       runtime: lambda.Runtime.NODEJS_20_X,
@@ -115,7 +114,6 @@ export class CdkBaseStack extends cdk.Stack {
       resultPath: '$.dynamoResult',
     });
 
-    // Task 2: Polly task with placeholder parameters
     // Task 2: Process audio metadata with Lambda function
     const processAudioMetadata = new tasks.LambdaInvoke(this, 'ProcessAudioMetadata', {
       lambdaFunction: this.audioProcessorFunction,
@@ -133,6 +131,7 @@ export class CdkBaseStack extends cdk.Stack {
     });
 
     // Task 3: Update metadata to FAILED status (for error path)
+    const updateMetadataFailed = new tasks.DynamoUpdateItem(this, 'UpdateMetadataFailed', {
       table: this.metadataTable,
       key: {
         audioId: tasks.DynamoAttributeValue.fromString(sfn.JsonPath.stringAt('$.executionId')),
@@ -152,8 +151,8 @@ export class CdkBaseStack extends cdk.Stack {
       resultPath: '$.dynamoUpdateResult',
     });
 
-    // Task 3: Publish failure notification to SNS
     // Task 4: Publish failure notification to SNS
+    const publishFailureNotification = new tasks.SnsPublish(this, 'PublishFailureNotification', {
       topic: this.failedTopic,
       message: sfn.TaskInput.fromObject({
         eventType: 'AudioProcessingFailed',
@@ -167,8 +166,8 @@ export class CdkBaseStack extends cdk.Stack {
       resultPath: '$.snsResult',
     });
 
-    // Task 4: Fail state after error handling
     // Task 5: Fail state after error handling
+    const jobFailed = new sfn.Fail(this, 'JobFailed', {
       error: 'ProcessingFailed',
       cause: 'Audio processing pipeline failed',
     });
@@ -178,8 +177,8 @@ export class CdkBaseStack extends cdk.Stack {
       .next(publishFailureNotification)
       .next(jobFailed);
 
-    // Task 5: Polly task with error handling
     // Task 6: Polly task with error handling
+    const pollyTask = new tasks.CallAwsService(this, 'SynthesizeSpeech', {
       action: 'synthesizeSpeech',
       service: 'polly',
       parameters: {
@@ -191,9 +190,11 @@ export class CdkBaseStack extends cdk.Stack {
       iamResources: ['*'],
       resultPath: '$.pollyResult',
     });
+
+    // Add error handling to Polly task
+    pollyTask.addCatch(errorHandlingChain, {
       errors: ['States.ALL'],
       resultPath: '$.Error',
-    // Create state machine definition with basic flow
     });
 
     // Add error handling to Lambda task
@@ -203,6 +204,7 @@ export class CdkBaseStack extends cdk.Stack {
     });
 
     // Task 7: Update metadata to COMPLETED status (success path)
+    const updateMetadataCompleted = new tasks.DynamoUpdateItem(this, 'UpdateMetadataCompleted', {
       table: this.metadataTable,
       key: {
         audioId: tasks.DynamoAttributeValue.fromString(sfn.JsonPath.stringAt('$.executionId')),
@@ -219,9 +221,9 @@ export class CdkBaseStack extends cdk.Stack {
       },
       resultPath: '$.dynamoUpdateResult',
     });
-    this.stateMachine = new sfn.StateMachine(this, 'SleepAudioPipelineStateMachine', {
 
     // Task 8: Publish success notification to SNS
+    const publishSuccessNotification = new tasks.SnsPublish(this, 'PublishSuccessNotification', {
       topic: this.completedTopic,
       message: sfn.TaskInput.fromObject({
         eventType: 'AudioProcessingCompleted',
@@ -237,14 +239,15 @@ export class CdkBaseStack extends cdk.Stack {
 
     // Create state machine definition with complete flow
     const definition = writeInitialMetadata
-    // Create state machine definition with complete flow including Lambda processor
-      .next(updateMetadataCompleted)
       .next(processAudioMetadata)
+      .next(pollyTask)
+      .next(updateMetadataCompleted)
       .next(publishSuccessNotification);
 
+    // Create the state machine
+    this.stateMachine = new sfn.StateMachine(this, 'SleepAudioPipelineStateMachine', {
       definitionBody: sfn.DefinitionBody.fromChainable(definition),
       stateMachineType: sfn.StateMachineType.STANDARD,
-    this.stateMachine = new sfn.StateMachine(this, 'SleepAudioPipelineStateMachine', {
       logs: {
         destination: stateMachineLogGroup,
         level: sfn.LogLevel.ALL,
@@ -257,13 +260,13 @@ export class CdkBaseStack extends cdk.Stack {
     this.inputBucket.grantRead(this.stateMachine);
     this.outputBucket.grantWrite(this.stateMachine);
 
-    this.eventRule = new events.Rule(this, 'AudioUploadedRule', {
+    // Grant state machine permissions to publish to SNS topics
     this.completedTopic.grantPublish(this.stateMachine);
     this.failedTopic.grantPublish(this.stateMachine);
 
     // EventBridge Rule - triggers on S3 object creation events
-      description: 'Triggers when audio files are uploaded to the input bucket',
     this.eventRule = new events.Rule(this, 'AudioUploadedRule', {
+      description: 'Triggers when audio files are uploaded to the input bucket',
       eventPattern: {
         source: ['aws.s3'],
         detailType: ['Object Created'],
@@ -271,9 +274,9 @@ export class CdkBaseStack extends cdk.Stack {
       enabled: true,
     });
 
-    // CFN Outputs for easy access to bucket names
-      new targets.SfnStateMachine(this.stateMachine, {
+    // Add Step Functions as target with input transformation
     this.eventRule.addTarget(
+      new targets.SfnStateMachine(this.stateMachine, {
         input: events.RuleTargetInput.fromObject({
           bucket: events.EventField.fromPath('$.detail.bucket.name'),
           key: events.EventField.fromPath('$.detail.object.key'),
@@ -289,11 +292,11 @@ export class CdkBaseStack extends cdk.Stack {
       })
     );
 
-    new cdk.CfnOutput(this, 'InputBucketName', {
     // CFN Outputs for easy access to bucket names and resources
+    new cdk.CfnOutput(this, 'InputBucketName', {
       value: this.inputBucket.bucketName,
       description: 'Name of the input S3 bucket for raw audio files',
-    // CFN Outputs for easy access to bucket names and resources
+      exportName: `${this.stackName}-InputBucket`,
     });
 
     new cdk.CfnOutput(this, 'OutputBucketName', {
