@@ -57,8 +57,30 @@ export interface AudioProcessorOutput {
   };
 }
 
+/**
+ * Structured logging helper - logs in JSON format for better CloudWatch Insights queries
+ */
+function logStructured(level: 'INFO' | 'ERROR' | 'WARN', message: string, context: any = {}) {
+  const logEntry = {
+    timestamp: new Date().toISOString(),
+    level,
+    message,
+    requestId: context.requestId || 'unknown',
+    executionId: context.executionId || 'unknown',
+    status: context.status || 'unknown',
+    ...context,
+  };
+  console.log(JSON.stringify(logEntry));
+}
+
 export const handler = async (event: AudioProcessorInput): Promise<AudioProcessorOutput> => {
-  console.log('Audio Processor Lambda invoked with input:', JSON.stringify(event, null, 2));
+  const requestContext = {
+    requestId: event.executionId,
+    executionId: event.executionId,
+    status: 'STARTED',
+  };
+
+  logStructured('INFO', 'Audio Processor Lambda invoked', { ...requestContext, input: event });
 
   try {
     // Validate required input fields
@@ -71,17 +93,31 @@ export const handler = async (event: AudioProcessorInput): Promise<AudioProcesso
       const error = new Error(
         `Input Validation Failed: Missing required fields: ${missingFields.join(', ')}`
       );
-      console.error('Validation error:', error.message);
+      
+      logStructured('ERROR', 'Input validation failed', {
+        ...requestContext,
+        status: 'VALIDATION_FAILED',
+        error: error.message,
+        missingFields,
+      });
+      
       throw error;
     }
 
-    // Log processing details
     // Validate file extension
     if (!isValidFileExtension(event.key)) {
       const error = new Error(
         `Unsupported file format. File: ${event.key}. Supported formats: ${ALL_SUPPORTED_EXTENSIONS.join(', ')}`
       );
-      console.error('File extension validation failed:', error.message);
+      
+      logStructured('ERROR', 'File extension validation failed', {
+        ...requestContext,
+        status: 'INVALID_FILE_FORMAT',
+        error: error.message,
+        fileName: event.key,
+        supportedFormats: ALL_SUPPORTED_EXTENSIONS,
+      });
+      
       throw error;
     }
 
@@ -90,18 +126,30 @@ export const handler = async (event: AudioProcessorInput): Promise<AudioProcesso
       const sizeInBytes = parseInt(event.size, 10);
       const maxSizeInBytes = 100 * 1024 * 1024; // 100 MB limit
       if (sizeInBytes > maxSizeInBytes) {
-        const error = new Error(`File size exceeds maximum allowed size of 100 MB. Actual size: ${sizeInBytes} bytes`);
         const sizeMB = (sizeInBytes / (1024 * 1024)).toFixed(2);
         const error = new Error(
           `File Size Limit Exceeded: File size (${sizeMB} MB) exceeds maximum of 100 MB`
         );
+        
+        logStructured('ERROR', 'File size limit exceeded', {
+          ...requestContext,
+          status: 'FILE_TOO_LARGE',
+          error: error.message,
+          fileSizeMB: sizeMB,
+          maxSizeMB: 100,
+        });
+        
         throw error;
       }
     }
 
-    console.log(`Processing audio for audioId: ${event.executionId}`);
-    console.log(`S3 Location: s3://${event.bucket}/${event.key}`);
-    console.log(`File size: ${event.size} bytes`);
+    logStructured('INFO', 'Audio validation successful', {
+      ...requestContext,
+      status: 'VALIDATING',
+      audioId: event.executionId,
+      s3Location: `s3://${event.bucket}/${event.key}`,
+      fileSize: event.size,
+    });
 
     // Return enriched metadata
     const output: AudioProcessorOutput = {
@@ -117,10 +165,20 @@ export const handler = async (event: AudioProcessorInput): Promise<AudioProcesso
       }
     };
 
-    console.log('Audio Processor Lambda completed successfully:', JSON.stringify(output, null, 2));
+    logStructured('INFO', 'Audio processing completed successfully', {
+      ...requestContext,
+      status: 'COMPLETED',
+      output,
+    });
+    
     return output;
   } catch (error) {
-    console.error('Error processing audio:', error);
+    logStructured('ERROR', 'Fatal error processing audio', {
+      ...requestContext,
+      status: 'FAILED',
+      error: error instanceof Error ? error.message : String(error),
+      errorStack: error instanceof Error ? error.stack : undefined,
+    });
     throw error;
   }
 };
