@@ -63,7 +63,16 @@ export const handler = async (event: AudioProcessorInput): Promise<AudioProcesso
   try {
     // Validate required input fields
     if (!event.executionId || !event.bucket || !event.key) {
-      throw new Error('Missing required input fields: executionId, bucket, or key');
+      const missingFields = [];
+      if (!event.executionId) missingFields.push('executionId');
+      if (!event.bucket) missingFields.push('bucket');
+      if (!event.key) missingFields.push('key');
+      
+      const error = new Error(
+        `Input Validation Failed: Missing required fields: ${missingFields.join(', ')}`
+      );
+      console.error('Validation error:', error.message);
+      throw error;
     }
 
     // Log processing details
@@ -82,7 +91,10 @@ export const handler = async (event: AudioProcessorInput): Promise<AudioProcesso
       const maxSizeInBytes = 100 * 1024 * 1024; // 100 MB limit
       if (sizeInBytes > maxSizeInBytes) {
         const error = new Error(`File size exceeds maximum allowed size of 100 MB. Actual size: ${sizeInBytes} bytes`);
-        console.error('File size validation failed:', error.message);
+        const sizeMB = (sizeInBytes / (1024 * 1024)).toFixed(2);
+        const error = new Error(
+          `File Size Limit Exceeded: File size (${sizeMB} MB) exceeds maximum of 100 MB`
+        );
         throw error;
       }
     }

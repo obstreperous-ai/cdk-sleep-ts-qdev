@@ -1,20 +1,52 @@
 #!/usr/bin/env node
 import * as cdk from 'aws-cdk-lib/core';
-import { CdkBaseStack } from '../lib/cdk-base-stack';
+import { CdkBaseStack, EnvironmentConfig } from '../lib/cdk-base-stack';
 
 const app = new cdk.App();
-new CdkBaseStack(app, 'CdkBaseStack', {
-  /* If you don't specify 'env', this stack will be environment-agnostic.
-   * Account/Region-dependent features and context lookups will not work,
-   * but a single synthesized template can be deployed anywhere. */
 
-  /* Uncomment the next line to specialize this stack for the AWS Account
-   * and Region that are implied by the current CLI configuration. */
-  // env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
+// Get environment from context or default to 'dev'
+const environmentName = app.node.tryGetContext('environment') || 'dev';
 
-  /* Uncomment the next line if you know exactly what Account and Region you
-   * want to deploy the stack to. */
-  // env: { account: '123456789012', region: 'us-east-1' },
+// Get environment-specific configuration from cdk.json
+const environments = app.node.tryGetContext('environments');
+let envConfig: EnvironmentConfig | undefined;
 
-  /* For more information, see https://docs.aws.amazon.com/cdk/latest/guide/environments.html */
+if (environments && environments[environmentName]) {
+  const config = environments[environmentName];
+  envConfig = {
+    environment: environmentName,
+    account: config.account,
+    region: config.region,
+    logRetentionDays: config.logRetentionDays,
+    tracingEnabled: config.tracingEnabled,
+    inputBucketName: config.inputBucketName,
+    outputBucketName: config.outputBucketName,
+    lambdaMemorySize: config.lambdaMemorySize,
+  };
+}
+
+// Create stack with environment configuration
+new CdkBaseStack(app, `CdkSleepAudioStack-${environmentName}`, {
+  envConfig,
+  env: envConfig ? {
+    account: envConfig.account,
+    region: envConfig.region,
+  } : {
+    // Fallback to environment variables for backward compatibility
+    account: process.env.CDK_DEFAULT_ACCOUNT,
+    region: process.env.CDK_DEFAULT_REGION,
+  },
+  description: `Sleep Audio Pipeline - ${environmentName} environment`,
+  tags: {
+    Environment: environmentName,
+    Application: 'SleepAudioPipeline',
+    ManagedBy: 'CDK',
+  },
 });
+
+/**
+ * Deployment instructions:
+ * - npx cdk deploy --context environment=dev
+ * - npx cdk deploy --context environment=stage
+ * - npx cdk deploy --context environment=prod
+ */

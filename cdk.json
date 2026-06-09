@@ -102,5 +102,34 @@
     "@aws-cdk/aws-cloudfront:defaultFunctionRuntimeV2_0": true,
     "@aws-cdk/aws-elasticloadbalancingv2:usePostQuantumTlsPolicy": true,
     "@aws-cdk/aws-batch:defaultToAL2023": true
+  },
+  "environments": {
+    "dev": {
+      "account": "123456789012",
+      "region": "us-east-1",
+      "logRetentionDays": 7,
+      "tracingEnabled": false,
+      "inputBucketName": "sleep-audio-input-dev",
+      "outputBucketName": "sleep-audio-output-dev",
+      "lambdaMemorySize": 512
+    },
+    "stage": {
+      "account": "222222222222",
+      "region": "us-east-1",
+      "logRetentionDays": 14,
+      "tracingEnabled": true,
+      "inputBucketName": "sleep-audio-input-stage",
+      "outputBucketName": "sleep-audio-output-stage",
+      "lambdaMemorySize": 1024
+    },
+    "prod": {
+      "account": "333333333333",
+      "region": "us-east-1",
+      "logRetentionDays": 30,
+      "tracingEnabled": true,
+      "inputBucketName": "sleep-audio-input-prod",
+      "outputBucketName": "sleep-audio-output-prod",
+      "lambdaMemorySize": 1024
+    }
   }
 }
