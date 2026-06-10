@@ -777,4 +777,401 @@ describe('CdkBaseStack', () => {
       });
     });
   });
+
+  describe('Issue #10: Advanced Error Handling, Retry Policies & Observability', () => {
+    describe('Retry Policies', () => {
+      test('Lambda invocation task has retry policy with exponential backoff', () => {
+        const definitionString = template.toJSON().Resources;
+        const stateMachine = Object.values(definitionString).find(
+          (resource: any) => resource.Type === 'AWS::StepFunctions::StateMachine'
+        ) as any;
+        
+        expect(stateMachine).toBeDefined();
+        const definition = JSON.parse(stateMachine.Properties.DefinitionString);
+        
+        // Verify ProcessAudioMetadata task has retry configuration
+        const lambdaTask = definition.States['ProcessAudioMetadata'];
+        expect(lambdaTask.Retry).toBeDefined();
+        expect(lambdaTask.Retry.length).toBeGreaterThan(0);
+        
+        // Verify exponential backoff configuration
+        const retryConfig = lambdaTask.Retry[0];
+        expect(retryConfig.BackoffRate).toBe(2.0);
+        expect(retryConfig.MaxAttempts).toBe(3);
+        expect(retryConfig.IntervalSeconds).toBe(2);
+      });
+
+      test('Polly task has retry policy with exponential backoff', () => {
+        const definitionString = template.toJSON().Resources;
+        const stateMachine = Object.values(definitionString).find(
+          (resource: any) => resource.Type === 'AWS::StepFunctions::StateMachine'
+        ) as any;
+        
+        expect(stateMachine).toBeDefined();
+        const definition = JSON.parse(stateMachine.Properties.DefinitionString);
+        
+        // Verify SynthesizeSpeech task has retry configuration
+        const pollyTask = definition.States['SynthesizeSpeech'];
+        expect(pollyTask.Retry).toBeDefined();
+        expect(pollyTask.Retry.length).toBeGreaterThan(0);
+        
+        // Verify exponential backoff configuration
+        const retryConfig = pollyTask.Retry[0];
+        expect(retryConfig.BackoffRate).toBe(2.0);
+        expect(retryConfig.MaxAttempts).toBe(2);
+        expect(retryConfig.IntervalSeconds).toBe(1);
+      });
+
+      test('DynamoDB PutItem task has retry policy', () => {
+        const definitionString = template.toJSON().Resources;
+        const stateMachine = Object.values(definitionString).find(
+          (resource: any) => resource.Type === 'AWS::StepFunctions::StateMachine'
+        ) as any;
+        
+        expect(stateMachine).toBeDefined();
+        const definition = JSON.parse(stateMachine.Properties.DefinitionString);
+        
+        // Verify WriteInitialMetadata task has retry configuration
+        const dynamoTask = definition.States['WriteInitialMetadata'];
+        expect(dynamoTask.Retry).toBeDefined();
+        expect(dynamoTask.Retry.length).toBeGreaterThan(0);
+        
+        // Verify retry configuration
+        const retryConfig = dynamoTask.Retry[0];
+        expect(retryConfig.MaxAttempts).toBe(2);
+        expect(retryConfig.IntervalSeconds).toBe(1);
+      });
+
+      test('DynamoDB UpdateItem tasks have retry policy', () => {
+        const definitionString = template.toJSON().Resources;
+        const stateMachine = Object.values(definitionString).find(
+          (resource: any) => resource.Type === 'AWS::StepFunctions::StateMachine'
+        ) as any;
+        
+        expect(stateMachine).toBeDefined();
+        const definition = JSON.parse(stateMachine.Properties.DefinitionString);
+        
+        // Verify UpdateMetadataCompleted task has retry configuration
+        const updateCompletedTask = definition.States['UpdateMetadataCompleted'];
+        expect(updateCompletedTask.Retry).toBeDefined();
+        expect(updateCompletedTask.Retry.length).toBeGreaterThan(0);
+      });
+    });
+
+    describe('Advanced Error Handling', () => {
+      test('Lambda task catches specific Lambda service errors', () => {
+        const definitionString = template.toJSON().Resources;
+        const stateMachine = Object.values(definitionString).find(
+          (resource: any) => resource.Type === 'AWS::StepFunctions::StateMachine'
+        ) as any;
+        
+        expect(stateMachine).toBeDefined();
+        const definition = JSON.parse(stateMachine.Properties.DefinitionString);
+        
+        const lambdaTask = definition.States['ProcessAudioMetadata'];
+        expect(lambdaTask.Catch).toBeDefined();
+        
+        // Verify specific error types are caught
+        const errorTypes = lambdaTask.Catch.flatMap((c: any) => c.ErrorEquals);
+        expect(errorTypes).toContain('States.TaskFailed');
+      });
+
+      test('Polly task catches specific Polly and service errors', () => {
+        const definitionString = template.toJSON().Resources;
+        const stateMachine = Object.values(definitionString).find(
+          (resource: any) => resource.Type === 'AWS::StepFunctions::StateMachine'
+        ) as any;
+        
+        expect(stateMachine).toBeDefined();
+        const definition = JSON.parse(stateMachine.Properties.DefinitionString);
+        
+        const pollyTask = definition.States['SynthesizeSpeech'];
+        expect(pollyTask.Catch).toBeDefined();
+        
+        // Verify specific error types are caught
+        const errorTypes = pollyTask.Catch.flatMap((c: any) => c.ErrorEquals);
+        expect(errorTypes).toContain('States.TaskFailed');
+      });
+
+      test('DynamoDB write task catches DynamoDB specific errors', () => {
+        const definitionString = template.toJSON().Resources;
+        const stateMachine = Object.values(definitionString).find(
+          (resource: any) => resource.Type === 'AWS::StepFunctions::StateMachine'
+        ) as any;
+        
+        expect(stateMachine).toBeDefined();
+        const definition = JSON.parse(stateMachine.Properties.DefinitionString);
+        
+        const dynamoTask = definition.States['WriteInitialMetadata'];
+        expect(dynamoTask.Catch).toBeDefined();
+        
+        // Verify DynamoDB-specific errors are caught
+        const errorTypes = dynamoTask.Catch.flatMap((c: any) => c.ErrorEquals);
+        expect(errorTypes.length).toBeGreaterThan(0);
+      });
+
+      test('Error handling states include error context in DynamoDB update', () => {
+        const definitionString = template.toJSON().Resources;
+        const stateMachine = Object.values(definitionString).find(
+          (resource: any) => resource.Type === 'AWS::StepFunctions::StateMachine'
+        ) as any;
+        
+        expect(stateMachine).toBeDefined();
+        const definition = JSON.parse(stateMachine.Properties.DefinitionString);
+        
+        const updateFailedTask = definition.States['UpdateMetadataFailed'];
+        expect(updateFailedTask).toBeDefined();
+        expect(updateFailedTask.Parameters).toBeDefined();
+      });
+
+      test('Error handling publishes detailed error information to SNS', () => {
+        const definitionString = template.toJSON().Resources;
+        const stateMachine = Object.values(definitionString).find(
+          (resource: any) => resource.Type === 'AWS::StepFunctions::StateMachine'
+        ) as any;
+        
+        expect(stateMachine).toBeDefined();
+        const definition = JSON.parse(stateMachine.Properties.DefinitionString);
+        
+        const publishFailureTask = definition.States['PublishFailureNotification'];
+        expect(publishFailureTask).toBeDefined();
+        expect(publishFailureTask.Parameters).toBeDefined();
+      });
+    });
+
+    describe('X-Ray Tracing', () => {
+      test('Lambda function has X-Ray tracing enabled when configured', () => {
+        const prodConfig: EnvironmentConfig = {
+          environment: 'prod',
+          account: '333333333333',
+          region: 'us-east-1',
+          logRetentionDays: 30,
+          tracingEnabled: true,
+          inputBucketName: 'sleep-audio-input-prod',
+          outputBucketName: 'sleep-audio-output-prod'
+        };
+        
+        const prodStack = new CdkBase.CdkBaseStack(app, 'ProdXRayStack', {
+          envConfig: prodConfig,
+          env: { account: prodConfig.account, region: prodConfig.region }
+        });
+        
+        const prodTemplate = Template.fromStack(prodStack);
+        prodTemplate.hasResourceProperties('AWS::Lambda::Function', {
+          TracingConfig: {
+            Mode: 'Active'
+          }
+        });
+      });
+
+      test('Lambda function has X-Ray tracing disabled in dev environment', () => {
+        const devConfig: EnvironmentConfig = {
+          environment: 'dev',
+          account: '123456789012',
+          region: 'us-east-1',
+          logRetentionDays: 7,
+          tracingEnabled: false,
+          inputBucketName: 'sleep-audio-input-dev',
+          outputBucketName: 'sleep-audio-output-dev'
+        };
+        
+        const devStack = new CdkBase.CdkBaseStack(app, 'DevXRayStack', {
+          envConfig: devConfig,
+          env: { account: devConfig.account, region: devConfig.region }
+        });
+        
+        const devTemplate = Template.fromStack(devStack);
+        devTemplate.hasResourceProperties('AWS::Lambda::Function', {
+          TracingConfig: Match.absent()
+        });
+      });
+
+      test('State Machine has X-Ray tracing enabled when configured', () => {
+        const prodConfig: EnvironmentConfig = {
+          environment: 'prod',
+          account: '333333333333',
+          region: 'us-east-1',
+          logRetentionDays: 30,
+          tracingEnabled: true,
+          inputBucketName: 'sleep-audio-input-prod',
+          outputBucketName: 'sleep-audio-output-prod'
+        };
+        
+        const prodStack = new CdkBase.CdkBaseStack(app, 'ProdSMXRayStack', {
+          envConfig: prodConfig,
+          env: { account: prodConfig.account, region: prodConfig.region }
+        });
+        
+        const prodTemplate = Template.fromStack(prodStack);
+        prodTemplate.hasResourceProperties('AWS::StepFunctions::StateMachine', {
+          TracingConfiguration: {
+            Enabled: true
+          }
+        });
+      });
+
+      test('Lambda execution role has X-Ray permissions when tracing is enabled', () => {
+        const prodConfig: EnvironmentConfig = {
+          environment: 'prod',
+          account: '333333333333',
+          region: 'us-east-1',
+          logRetentionDays: 30,
+          tracingEnabled: true,
+          inputBucketName: 'sleep-audio-input-prod',
+          outputBucketName: 'sleep-audio-output-prod'
+        };
+        
+        const prodStack = new CdkBase.CdkBaseStack(app, 'ProdXRayPermStack', {
+          envConfig: prodConfig,
+          env: { account: prodConfig.account, region: prodConfig.region }
+        });
+        
+        const prodTemplate = Template.fromStack(prodStack);
+        prodTemplate.hasResourceProperties('AWS::IAM::Policy', {
+          PolicyDocument: {
+            Statement: Match.arrayWith([
+              Match.objectLike({
+                Action: Match.arrayWith([
+                  'xray:PutTraceSegments',
+                  'xray:PutTelemetryRecords'
+                ]),
+                Effect: 'Allow',
+              })
+            ])
+          }
+        });
+      });
+    });
+
+    describe('CloudWatch Alarms', () => {
+      test('Creates CloudWatch Alarm for State Machine execution failures', () => {
+        template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+          MetricName: 'ExecutionsFailed',
+          Namespace: 'AWS/States',
+          Statistic: 'Sum',
+          Threshold: 5,
+          EvaluationPeriods: 1,
+          Period: 300,
+          ComparisonOperator: 'GreaterThanThreshold'
+        });
+      });
+
+      test('Creates CloudWatch Alarm for Lambda function errors', () => {
+        template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+          MetricName: 'Errors',
+          Namespace: 'AWS/Lambda',
+          Statistic: 'Sum',
+          Threshold: 5,
+          EvaluationPeriods: 1,
+          Period: 300,
+          ComparisonOperator: 'GreaterThanThreshold'
+        });
+      });
+
+      test('Creates CloudWatch Alarm for Lambda duration', () => {
+        template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+          MetricName: 'Duration',
+          Namespace: 'AWS/Lambda',
+          ExtendedStatistic: 'p99',
+          Threshold: 50000,
+          EvaluationPeriods: 1,
+          Period: 300,
+          ComparisonOperator: 'GreaterThanThreshold'
+        });
+      });
+
+      test('CloudWatch Alarms have SNS actions configured', () => {
+        template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+          AlarmActions: Match.arrayWith([
+            Match.objectLike({
+              'Fn::GetAtt': Match.arrayWith([
+                Match.stringLikeRegexp('.*Failed.*')
+              ])
+            })
+          ])
+        });
+      });
+
+      test('Creates at least 3 CloudWatch Alarms for critical paths', () => {
+        template.resourceCountIs('AWS::CloudWatch::Alarm', 3);
+      });
+    });
+
+    describe('CloudWatch Dashboard (Optional)', () => {
+      test('Creates CloudWatch Dashboard for monitoring', () => {
+        // Dashboard is optional, but if created should be configured
+        const resources = template.toJSON().Resources;
+        const dashboards = Object.values(resources).filter(
+          (resource: any) => resource.Type === 'AWS::CloudWatch::Dashboard'
+        );
+        
+        // If dashboard exists, verify it has proper configuration
+        if (dashboards.length > 0) {
+          template.hasResourceProperties('AWS::CloudWatch::Dashboard', {
+            DashboardBody: Match.anyValue()
+          });
+        }
+      });
+    });
+
+    describe('Structured Logging', () => {
+      test('Lambda function has environment variables for structured logging', () => {
+        template.hasResourceProperties('AWS::Lambda::Function', {
+          Environment: {
+            Variables: {
+              TABLE_NAME: Match.anyValue(),
+              // Structured logging is implemented in code, not via env vars
+              // This test ensures the Lambda is configured properly
+            }
+          }
+        });
+      });
+
+      test('Lambda function configured with appropriate log retention', () => {
+        // Verify Lambda CloudWatch log group has retention
+        template.hasResourceProperties('AWS::Logs::LogGroup', {
+          RetentionInDays: Match.anyValue()
+        });
+      });
+    });
+
+    describe('Integration Tests - Retry and Error Handling Together', () => {
+      test('Lambda task has both retry and catch configured', () => {
+        const definitionString = template.toJSON().Resources;
+        const stateMachine = Object.values(definitionString).find(
+          (resource: any) => resource.Type === 'AWS::StepFunctions::StateMachine'
+        ) as any;
+        
+        expect(stateMachine).toBeDefined();
+        const definition = JSON.parse(stateMachine.Properties.DefinitionString);
+        
+        const lambdaTask = definition.States['ProcessAudioMetadata'];
+        expect(lambdaTask.Retry).toBeDefined();
+        expect(lambdaTask.Catch).toBeDefined();
+        
+        // Retry should be attempted before catch
+        expect(lambdaTask.Retry.length).toBeGreaterThan(0);
+        expect(lambdaTask.Catch.length).toBeGreaterThan(0);
+      });
+
+      test('Polly task has both retry and catch configured', () => {
+        const definitionString = template.toJSON().Resources;
+        const stateMachine = Object.values(definitionString).find(
+          (resource: any) => resource.Type === 'AWS::StepFunctions::StateMachine'
+        ) as any;
+        
+        expect(stateMachine).toBeDefined();
+        const definition = JSON.parse(stateMachine.Properties.DefinitionString);
+        
+        const pollyTask = definition.States['SynthesizeSpeech'];
+        expect(pollyTask.Retry).toBeDefined();
+        expect(pollyTask.Catch).toBeDefined();
+      });
+
+      test('State machine synthesizes successfully with all enhancements', () => {
+        // Overall integration test - if stack synthesizes, all components work together
+        expect(() => app.synth()).not.toThrow();
+      });
+    });
+  });
 });

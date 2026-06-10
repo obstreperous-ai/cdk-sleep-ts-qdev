@@ -37,10 +37,13 @@ The Sleep Audio Pipeline processes audio files through the following stages:
 ## Architecture Diagram
 
 ### Complete Integrated Pipeline (Issue #8 - Current Implementation)
-
+### Complete Integrated Pipeline with Advanced Error Handling & Observability (Issue #10 - Current Implementation)
 ```mermaid
 flowchart LR
     %% User Layer
+    %% Observability Components
+    XRay[X-Ray Tracing<br/>✓ Lambda & State Machine]
+    
     User[User/Application<br/>Uploads Files]
     
     %% Ingestion Layer
@@ -53,30 +56,34 @@ flowchart LR
     subgraph StateMachine["Step Functions State Machine<br/>SleepAudioPipelineStateMachine"]
         direction TB
         SM1[WriteInitialMetadata<br/>DynamoDB PutItem<br/>Status: PROCESSING]
-        SM2[ProcessAudioMetadata<br/>Lambda Invoke<br/>✓ Input Validation<br/>✓ File Extension Check]
-        SM3[SynthesizeSpeech<br/>Polly Task<br/>✓ Neural Voice]
-        SM4[UpdateMetadataCompleted<br/>DynamoDB UpdateItem<br/>Status: COMPLETED]
-        SM5[PublishSuccessNotification<br/>SNS Publish]
+        SM1[WriteInitialMetadata<br/>DynamoDB PutItem<br/>Status: PROCESSING<br/>🔄 Retry: 2 attempts]
+        SM2[ProcessAudioMetadata<br/>Lambda Invoke<br/>✓ Input Validation<br/>✓ File Extension Check<br/>🔄 Retry: 3 attempts<br/>⚡ Exponential Backoff]
+        SM3[SynthesizeSpeech<br/>Polly Task<br/>✓ Neural Voice<br/>🔄 Retry: 2 attempts<br/>⚡ Exponential Backoff]
+        SM4[UpdateMetadataCompleted<br/>DynamoDB UpdateItem<br/>Status: COMPLETED<br/>🔄 Retry: 2 attempts]
         
         %% Error Handling Path
         SME1[UpdateMetadataFailed<br/>DynamoDB UpdateItem<br/>Status: FAILED]
-        SME2[PublishFailureNotification<br/>SNS Publish]
-        SME3[JobFailed<br/>Fail State]
+        SME1[UpdateMetadataFailed<br/>DynamoDB UpdateItem<br/>Status: FAILED<br/>💾 Store Error Context]
+        SME2[PublishFailureNotification<br/>SNS Publish<br/>📧 Detailed Error Info]
         
         SM1 --> SM2
         SM2 --> SM3
+        SM1 -.->|🔥 Catch: All Errors| SME1
         SM3 --> SM4
+        SM2 -.->|🔥 Catch: Lambda/Service Errors| SME1
         SM4 --> SM5
+        SM3 -.->|🔥 Catch: Polly/Task Errors| SME1
         
         SM2 -.->|Error Catch| SME1
-        SM3 -.->|Error Catch| SME1
-        SME1 --> SME2
         SME2 --> SME3
     end
     
     %% Lambda Function
     Lambda[Lambda Function<br/>SleepAudioProcessorFunction<br/>✓ Validates Required Fields<br/>✓ Checks File Extensions<br/>✓ Validates File Size]
+    Lambda[Lambda Function<br/>SleepAudioProcessorFunction<br/>✓ Validates Required Fields<br/>✓ Checks File Extensions<br/>✓ Validates File Size<br/>📊 Structured JSON Logging<br/>🔍 X-Ray Tracing Active]
     
+    %% Observability Layer
+    CloudWatchAlarms[CloudWatch Alarms<br/>🚨 State Machine Failures<br/>🚨 Lambda Errors<br/>🚨 Lambda High Duration p99]
     %% Storage Layer
     MetadataTable[DynamoDB Table<br/>SleepAudioMetadataTable<br/>✓ Tracks Processing Status<br/>✓ Point-in-Time Recovery]
     OutputBucket[S3 Output Bucket<br/>✓ Encrypted & Versioned]
@@ -85,11 +92,14 @@ flowchart LR
     CompletedTopic[SNS Topic<br/>SleepAudioPipelineCompleted<br/>✓ Success Notifications]
     FailedTopic[SNS Topic<br/>SleepAudioPipelineFailed<br/>✓ Failure Notifications]
     
+    CloudWatchAlarms -.->|Alert| FailedTopic
     %% Main Flow
     User -->|1. Upload Audio/Text| InputBucket
     InputBucket -->|2. S3 Event| EventRule
     EventRule -->|3. Start Execution| StateMachine
     
+    XRay -.->|Traces| StateMachine
+    XRay -.->|Traces| Lambda
     %% State Machine Interactions
     SM1 -.->|Write| MetadataTable
     SM2 -->|Invoke| Lambda
@@ -100,6 +110,8 @@ flowchart LR
     SME1 -.->|Update| MetadataTable
     SME2 -->|Publish| FailedTopic
     
+    CloudWatchAlarms -.->|Monitor| StateMachine
+    CloudWatchAlarms -.->|Monitor| Lambda
     %% Styling
     style InputBucket fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
     style EventRule fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
@@ -118,13 +130,20 @@ flowchart LR
     style SME2 fill:#FFCDD2,stroke:#C62828,stroke-width:2px,color:#000
     style SME3 fill:#FFCDD2,stroke:#C62828,stroke-width:2px,color:#000
 
+    style XRay fill:#ADD8E6,stroke:#4682B4,stroke-width:2px,color:#000
+    style CloudWatchAlarms fill:#FFE4B5,stroke:#FF8C00,stroke-width:2px,color:#000
 **Legend:**
 - ✓ Green boxes with solid borders: Fully Implemented and Wired (Issues #3-#8)
-- Yellow boxes: State Machine Success Path
+- ✓ Green boxes with solid borders: Fully Implemented and Wired (Issues #3-#10)
 - Red boxes: State Machine Error Handling Path
 - Solid arrows: Active data flow
+- Blue boxes: Observability Components (X-Ray Tracing)
+- Orange boxes: Monitoring & Alerting
 - Dashed arrows: Planned data flow
 
+- 🔄 Retry indicators: Configured retry policies
+- 🔥 Catch indicators: Error handling paths
+- ⚡ Exponential backoff enabled
 ### End-to-End Data Flow (Issue #8)
 
 #### Success Path:
@@ -148,6 +167,65 @@ If Lambda validation fails or Polly errors occur:
 4. **JobFailed** → Execution terminates with failure status
 
 ### Input Validation (Issue #8)
+### Enhanced Error Handling & Retry Strategy (Issue #10)
+
+#### Retry Policies:
+1. **Lambda Invocation** (`ProcessAudioMetadata`):
+   - Retry on: `States.TaskFailed`, `Lambda.ServiceException`, `Lambda.TooManyRequestsException`, `Lambda.SdkClientException`
+   - Max Attempts: 3
+   - Interval: 2 seconds
+   - Backoff Rate: 2.0 (exponential)
+   
+2. **Polly Task** (`SynthesizeSpeech`):
+   - Retry on: `States.TaskFailed`, `Polly.TextLengthExceededException`, `Polly.InvalidSsmlException`, `Polly.ServiceFailureException`, `States.Timeout`
+   - Max Attempts: 2
+   - Interval: 1 second
+   - Backoff Rate: 2.0 (exponential)
+   
+3. **DynamoDB Operations** (`WriteInitialMetadata`, `UpdateMetadataCompleted`):
+   - Retry on: `States.TaskFailed`, `DynamoDB.ProvisionedThroughputExceededException`, `DynamoDB.RequestLimitExceeded`, `DynamoDB.InternalServerError`, `DynamoDB.ServiceUnavailable`
+   - Max Attempts: 2
+   - Interval: 1 second
+   - Backoff Rate: 1.5
+
+#### Error Handling Flow:
+1. **Retry First**: Each task attempts retries with exponential backoff before catching errors
+2. **Catch Errors**: After retries exhausted, errors are caught with `States.ALL`
+3. **Update DynamoDB**: Failed status written to metadata table with error details
+4. **Notify**: SNS notification sent to failure topic with complete error context
+5. **Fail**: Execution terminates with detailed failure information
+
+### Observability Enhancements (Issue #10)
+
+#### X-Ray Tracing:
+- **Lambda Function**: Active tracing enabled in prod/stage environments
+- **State Machine**: Tracing enabled conditionally based on environment
+- **Service Map**: Visualizes end-to-end request flow
+- **Performance Analysis**: Identifies bottlenecks and latency issues
+
+#### Structured Logging:
+- **Format**: JSON logs for CloudWatch Insights compatibility
+- **Fields**: timestamp, level, message, requestId, executionId, status
+- **Searchable**: Enables complex queries and filtering
+- **Correlation**: Links logs across services via executionId
+
+#### CloudWatch Alarms:
+1. **State Machine Execution Failures**:
+   - Metric: `ExecutionsFailed`
+   - Threshold: > 5 failures in 5 minutes
+   - Action: Publish to SNS failure topic
+   
+2. **Lambda Function Errors**:
+   - Metric: `Errors`
+   - Threshold: > 5 errors in 5 minutes
+   - Action: Publish to SNS failure topic
+   
+3. **Lambda High Duration (p99)**:
+   - Metric: `Duration`
+   - Statistic: p99
+   - Threshold: > 50 seconds (50,000 ms)
+   - Action: Publish to SNS failure topic
+
 
 **Lambda Validation Logic:**
 - **Required Fields:** Validates presence of `executionId`, `bucket`, and `key`
@@ -240,6 +318,48 @@ flowchart TD
 ## Implementation Status
 
 ### ✅ Completed (Issue #7)
+### ✅ Completed (Issue #10)
+
+#### Advanced Error Handling, Retry Policies & Observability Enhancements
+**Status**: ✅ Implemented
+
+**Retry Policies**:
+- Lambda invocation: 3 retry attempts with exponential backoff (2.0)
+- Polly synthesis: 2 retry attempts with exponential backoff (2.0)
+- DynamoDB operations: 2 retry attempts with moderate backoff (1.5)
+- All retries include specific error type matching for targeted recovery
+
+**Advanced Error Handling**:
+- Specific catch blocks for Lambda service errors
+- Polly-specific error handling (text length, SSML, service failures)
+- DynamoDB throttling and service error handling
+- Error context preserved and logged in DynamoDB
+- Detailed error notifications via SNS
+
+**X-Ray Tracing**:
+- Lambda function tracing enabled conditionally (prod/stage)
+- State Machine tracing enabled via environment configuration
+- End-to-end request tracking across all services
+- Performance insights and bottleneck identification
+
+**Structured Logging**:
+- JSON-formatted logs in Lambda for CloudWatch Insights
+- Consistent fields: timestamp, level, message, requestId, executionId, status
+- Detailed error context with stack traces
+- Correlation IDs for multi-service tracing
+
+**CloudWatch Alarms**:
+- State Machine execution failures (> 5 in 5 min)
+- Lambda function errors (> 5 in 5 min)
+- Lambda high duration p99 (> 50 seconds)
+- All alarms publish to SNS failure topic for notifications
+
+**Production Readiness**:
+- Transient failures handled automatically via retries
+- Permanent failures caught and reported with full context
+- Observability enabled for debugging and monitoring
+- Alarms provide proactive failure detection
+
 
 #### Lambda Function (`SleepAudioProcessorFunction`)
 **Status**: ✅ Implemented
@@ -1418,4 +1538,5 @@ Update this document when:
 ---
 
 **Last Updated**: [Current Date] (Issue #9 Complete)  
-**Next Review**: After Issue #10 (Advanced Error Handling, Retries & Observability)
+**Last Updated**: [Current Date] (Issue #10 Complete - Advanced Error Handling, Retries & Observability)  
+**Next Review**: After Issue #11 (Full Audio Processing Implementation & Output Handling)
