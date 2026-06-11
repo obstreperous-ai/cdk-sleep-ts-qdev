@@ -1,11 +1,13 @@
 /**
  * Sleep Audio Processor Lambda Function
  * 
- * This Lambda function serves as a placeholder for future audio processing,
- * metadata enrichment, or validation logic. It currently:
+ * This Lambda function performs complete audio processing from input to output:
  * - Receives input from the Step Functions state machine (S3 event details, audioId)
  * - Validates required input fields and file extensions
- * - Performs basic input validation
+ * - Downloads files from input S3 bucket
+ * - Processes audio or converts text-to-speech using Polly
+ * - Uploads processed audio to output S3 bucket
+ * - Updates DynamoDB with output metadata
  * - Returns enriched metadata response
  * 
  * Future enhancements:
@@ -16,9 +18,15 @@
  */
 
 import { DynamoDBClient, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
+import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { PollyClient, SynthesizeSpeechCommand } from '@aws-sdk/client-polly';
 
 const dynamoDBClient = new DynamoDBClient({});
+const s3Client = new S3Client({});
+const pollyClient = new PollyClient({});
 const TABLE_NAME = process.env.TABLE_NAME;
+const INPUT_BUCKET = process.env.INPUT_BUCKET_NAME;
+const OUTPUT_BUCKET = process.env.OUTPUT_BUCKET_NAME;
 
 // Supported file extensions for audio processing
 const SUPPORTED_AUDIO_EXTENSIONS = ['.mp3', '.wav', '.m4a', '.flac', '.ogg'];
@@ -47,12 +55,14 @@ export interface AudioProcessorInput {
 export interface AudioProcessorOutput {
   success: boolean;
   message: string;
+  outputBucket?: string;
+  outputKey?: string;
+  fileSize?: number;
   metadata: {
     audioId: string;
     processingTimestamp: string;
     bucket: string;
     key: string;
-    size: string;
     status: string;
   };
 }
@@ -74,6 +84,22 @@ function logStructured(level: 'INFO' | 'ERROR' | 'WARN', message: string, contex
 }
 
 export const handler = async (event: AudioProcessorInput): Promise<AudioProcessorOutput> => {
+/**
+ * Helper to convert stream to buffer
+ */
+async function streamToBuffer(stream: any): Promise<Buffer> {
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of stream) {
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+async function streamToString(stream: any): Promise<string> {
+  const buffer = await streamToBuffer(stream);
+  return buffer.toString('utf-8');
+}
+
   const requestContext = {
     requestId: event.executionId,
     executionId: event.executionId,
@@ -152,17 +178,93 @@ export const handler = async (event: AudioProcessorInput): Promise<AudioProcesso
     });
 
     // Return enriched metadata
-    const output: AudioProcessorOutput = {
+    // Process the file based on type
+    const isText = SUPPORTED_TEXT_EXTENSIONS.some(ext => event.key.toLowerCase().endsWith(ext));
+    let audioBuffer: Buffer;
+    let outputFilename: string;
+    let mimeType: string;
+
+    if (isText) {
+      // Text-to-speech flow
+      logStructured('INFO', 'Starting text-to-speech synthesis', { ...requestContext, status: 'SYNTHESIZING' });
+      const getCmd = new GetObjectCommand({ Bucket: event.bucket, Key: event.key });
+      const s3Obj = await s3Client.send(getCmd);
+      const textContent = await streamToString(s3Obj.Body as any);
+      
+      const pollyCmd = new SynthesizeSpeechCommand({
+        Text: textContent,
+        OutputFormat: 'mp3',
+        VoiceId: event.voiceId || 'Joanna',
+        Engine: 'neural',
+      });
+      const pollyResp = await pollyClient.send(pollyCmd);
+      audioBuffer = await streamToBuffer(pollyResp.AudioStream as any);
+      
+      const ts = Date.now();
+      outputFilename = event.key.replace(/\.txt$/i, `_${ts}.mp3`);
+      mimeType = 'audio/mpeg';
+    } else {
+      // Audio processing flow
+      logStructured('INFO', 'Processing audio file', { ...requestContext, status: 'PROCESSING_AUDIO' });
+      const getCmd = new GetObjectCommand({ Bucket: event.bucket, Key: event.key });
+      const s3Obj = await s3Client.send(getCmd);
+      audioBuffer = await streamToBuffer(s3Obj.Body as any);
+      
+      const ts = Date.now();
+      const ext = event.key.substring(event.key.lastIndexOf('.'));
+      const base = event.key.substring(0, event.key.lastIndexOf('.'));
+      outputFilename = `${base}_processed_${ts}${ext}`;
+      mimeType = ext === '.mp3' ? 'audio/mpeg' : 'audio/wav';
+    }
+
+    // Upload to output bucket
+    if (!OUTPUT_BUCKET) throw new Error('OUTPUT_BUCKET_NAME not configured');
+    
+    logStructured('INFO', 'Uploading processed audio to output bucket', {
+      ...requestContext,
+      status: 'UPLOADING',
+      outputBucket: OUTPUT_BUCKET,
+      outputKey: outputFilename,
+      fileSize: audioBuffer.length,
+    });
+    
+    const putCmd = new PutObjectCommand({
+      Bucket: OUTPUT_BUCKET,
+      Key: outputFilename,
+      Body: audioBuffer,
+      ContentType: mimeType,
+      ServerSideEncryption: 'AES256',
+    });
+    await s3Client.send(putCmd);
+
+    // Update database with output info
+    const updateCmd = new UpdateItemCommand({
+      TableName: TABLE_NAME,
+      Key: { audioId: { S: event.executionId }, createdAt: { S: event.timestamp } },
+      UpdateExpression: 'SET #st = :st, outputBucket = :ob, outputKey = :ok, fileSize = :fs, updatedAt = :ua',
+      ExpressionAttributeNames: { '#st': 'status' },
+      ExpressionAttributeValues: {
+        ':st': { S: 'COMPLETED' },
+        ':ob': { S: OUTPUT_BUCKET },
+        ':ok': { S: outputFilename },
+        ':fs': { N: audioBuffer.length.toString() },
+        ':ua': { S: new Date().toISOString() },
+      },
+    });
+    await dynamoDBClient.send(updateCmd);
+
       success: true,
       message: 'Audio metadata processed successfully',
-      metadata: {
+      message: 'Audio processed successfully',
+      outputBucket: OUTPUT_BUCKET,
+      outputKey: outputFilename,
+      fileSize: audioBuffer.length,
         audioId: event.executionId,
         processingTimestamp: new Date().toISOString(),
         bucket: event.bucket,
         key: event.key,
         size: event.size,
-        status: 'VALIDATED'
-      }
+        status: 'COMPLETED'
     };
 
     logStructured('INFO', 'Audio processing completed successfully', {

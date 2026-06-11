@@ -135,10 +135,12 @@ export class CdkBaseStack extends cdk.Stack {
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'audio-processor.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
-      timeout: cdk.Duration.seconds(60),
-      memorySize: this.envConfig.lambdaMemorySize ?? 512,
+      timeout: cdk.Duration.seconds(300),
+      memorySize: 1024,
       environment: {
         TABLE_NAME: this.metadataTable.tableName,
+        INPUT_BUCKET_NAME: this.inputBucket.bucketName,
+        OUTPUT_BUCKET_NAME: this.outputBucket.bucketName,
       },
       description: 'Processes audio metadata and performs validation for the sleep audio pipeline',
       logRetention: logRetention,
@@ -147,6 +149,21 @@ export class CdkBaseStack extends cdk.Stack {
 
     // Grant Lambda permissions to access DynamoDB table
     this.metadataTable.grantReadWriteData(this.audioProcessorFunction);
+
+    // Grant Lambda permissions to read from input bucket
+    this.inputBucket.grantRead(this.audioProcessorFunction);
+
+    // Grant Lambda permissions to write to output bucket
+    this.outputBucket.grantWrite(this.audioProcessorFunction);
+
+    // Grant Lambda function Polly permissions (for text-to-speech inside Lambda)
+    this.audioProcessorFunction.addToRolePolicy(
+      new cdk.aws_iam.PolicyStatement({
+        effect: cdk.aws_iam.Effect.ALLOW,
+        actions: ['polly:SynthesizeSpeech'],
+        resources: ['*'],
+      })
+    );
 
     // Task 1: Write initial metadata to DynamoDB (status: PROCESSING)
     const writeInitialMetadata = new tasks.DynamoPutItem(this, 'WriteInitialMetadata', {
@@ -258,53 +275,21 @@ export class CdkBaseStack extends cdk.Stack {
 
     // Task 6: Polly task with error handling
     const pollyTask = new tasks.CallAwsService(this, 'SynthesizeSpeech', {
-      action: 'synthesizeSpeech',
-      service: 'polly',
-      parameters: {
-        Text: sfn.JsonPath.stringAt('$.text'),
-        OutputFormat: 'mp3',
-        VoiceId: sfn.JsonPath.stringAt('$.voiceId'),
-        Engine: 'neural',
-      },
-      iamResources: ['*'],
-      resultPath: '$.pollyResult',
-    });
-
-
-    // Add retry policy to Polly task with exponential backoff
-    pollyTask.addRetry({
-      errors: [
-        'States.TaskFailed',
-        'Polly.TextLengthExceededException',
-        'Polly.InvalidSsmlException',
-        'Polly.ServiceFailureException',
-        'States.Timeout',
-      ],
-      interval: cdk.Duration.seconds(1),
-      maxAttempts: 2,
-      backoffRate: 2.0,
-    });
-    // Add error handling to Polly task
-    // Add catch block to initial DynamoDB write
-    writeInitialMetadata.addCatch(errorHandlingChain, {
       errors: ['States.ALL'],
       resultPath: '$.Error',
     });
 
     // Add catch block to Polly task
       errors: ['States.ALL'],
-      resultPath: '$.Error',
+    // Add catch block to Lambda task (handles full audio processing)
+    processAudioMetadata.addCatch(errorHandlingChain, {
     });
 
     // Add error handling to Lambda task
     // Add catch block to Lambda task
-      errors: ['States.ALL'],
-      resultPath: '$.Error',
-    });
-
-    // Task 7: Update metadata to COMPLETED status (success path)
-    const updateMetadataCompleted = new tasks.DynamoUpdateItem(this, 'UpdateMetadataCompleted', {
       table: this.metadataTable,
+    // Note: Lambda now handles full processing (download, process/Polly, upload, DB update)
+    // So this UpdateMetadataCompleted task is now optional/redundant but kept for consistency
       key: {
         audioId: tasks.DynamoAttributeValue.fromString(sfn.JsonPath.stringAt('$.executionId')),
         createdAt: tasks.DynamoAttributeValue.fromString(sfn.JsonPath.stringAt('$.timestamp')),
@@ -353,7 +338,6 @@ export class CdkBaseStack extends cdk.Stack {
     const definition = writeInitialMetadata
       .next(processAudioMetadata)
       .next(pollyTask)
-      .next(updateMetadataCompleted)
       .next(publishSuccessNotification);
 
     // Create the state machine

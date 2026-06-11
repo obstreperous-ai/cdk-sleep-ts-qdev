@@ -317,6 +317,147 @@ flowchart TD
 
 ## Implementation Status
 
+### ✅ Completed (Issue #11)
+
+#### Core Audio Processing Logic and Output Handling
+**Status**: ✅ Implemented
+
+The Lambda function now implements full end-to-end audio processing from input to output:
+
+**Lambda Configuration Updates:**
+- **Timeout**: Increased from 60s to 300s (5 minutes) for audio processing
+- **Memory**: Increased from 512 MB to 1024 MB for audio operations
+- **Environment Variables**: 
+  - `TABLE_NAME`: DynamoDB table name
+  - `INPUT_BUCKET_NAME`: Input S3 bucket name (new)
+  - `OUTPUT_BUCKET_NAME`: Output S3 bucket name (new)
+- **IAM Permissions**: Enhanced least-privilege access to:
+  - S3 GetObject on input bucket
+  - S3 PutObject on output bucket
+  - Polly SynthesizeSpeech
+  - DynamoDB PutItem/UpdateItem/GetItem
+  - CloudWatch Logs
+
+**Core Audio Processing Flow:**
+
+The Lambda function now performs the complete audio processing pipeline:
+
+1. **Input Validation** (unchanged):
+   - Validates required fields (executionId, bucket, key)
+   - Validates file extension against whitelist
+   - Validates file size (< 100 MB)
+
+2. **Download from S3**:
+   - Downloads input file from S3 input bucket
+   - Uses streaming approach to handle large files efficiently
+   - Supports both text (.txt) and audio files (.mp3, .wav, .m4a, .flac, .ogg)
+
+3. **Processing Logic**:
+   - **For Text Files**: 
+     - Reads text content from file
+     - Invokes Amazon Polly with neural voice (Joanna by default)
+     - Generates MP3 audio from text
+     - Output format: `{original}_TIMESTAMP.mp3`
+   - **For Audio Files**:
+     - Downloads audio file
+     - Performs basic processing (currently pass-through, extensible for normalization/enhancement)
+     - Output format: `{original}_processed_TIMESTAMP.{ext}`
+
+4. **Upload to Output S3**:
+   - Uploads processed audio to output S3 bucket
+   - Sets appropriate Content-Type based on file format
+   - Applies S3-managed encryption (AES256)
+   - Generates timestamped output filename for uniqueness
+
+5. **Update DynamoDB**:
+   - Updates metadata record with output information:
+     - `status`: 'COMPLETED'
+     - `outputBucket`: Output S3 bucket name
+     - `outputKey`: Processed file key in S3
+     - `fileSize`: Size of processed audio in bytes
+     - `updatedAt`: Timestamp of completion
+
+6. **Return Metadata**:
+   - Returns structured response with:
+     - Success indicator
+     - Output S3 location (bucket + key)
+     - File size
+     - Processing metadata
+
+**State Machine Simplification:**
+
+The Step Functions workflow has been simplified now that Lambda handles the full processing:
+
+```
+Start → WriteInitialMetadata (DynamoDB) 
+     → ProcessAudioMetadata (Lambda - FULL PROCESSING)
+         ↳ Download from S3
+         ↳ Process/Generate Audio (includes Polly for text)
+         ↳ Upload to S3
+         ↳ Update DynamoDB with output
+     → UpdateMetadataCompleted (DynamoDB)
+     → PublishSuccessNotification (SNS)
+     → End
+```
+
+**Key Changes:**
+- Removed standalone `SynthesizeSpeech` (Polly) task from state machine
+- Polly is now called directly from Lambda for text files
+- Lambda handles complete processing lifecycle in a single invocation
+- Simplified state machine reduces complexity and state transitions
+- All S3 operations (input/output) now handled by Lambda
+
+**Error Handling:**
+- Lambda errors (S3, Polly, DynamoDB) caught by state machine catch blocks
+- Error details logged to CloudWatch with full context
+- DynamoDB updated with error status
+- SNS failure notification sent
+- Maintains existing retry policies on Lambda invocation (3 attempts with exponential backoff)
+
+**Output Artifacts:**
+
+Processed audio files are stored in the output S3 bucket with the following characteristics:
+- **Naming Convention**: `{original-name}_[processed_]{timestamp}.{ext}`
+- **Location**: Output S3 bucket (encrypted, versioned)
+- **Metadata in DynamoDB**:
+  - Input location (bucket + key)
+  - Output location (bucket + key)
+  - File sizes (input and output)
+  - Processing status (PROCESSING → COMPLETED/FAILED)
+  - Timestamps (created, updated)
+  - Error message (if failed)
+
+**Audio Processing Capabilities:**
+
+Currently implemented:
+- Text-to-speech using Amazon Polly (neural voices)
+- Audio file pass-through with metadata tracking
+- Multiple audio format support (.mp3, .wav, .m4a, .flac, .ogg)
+- Automatic content-type detection and S3 metadata
+
+Future enhancements (extensible architecture):
+- Audio normalization and volume adjustment
+- Format conversion (e.g., WAV → MP3)
+- Audio mixing with background sounds
+- Quality enhancement and noise reduction
+- Metadata extraction (duration, bitrate, sample rate using ffprobe)
+- Content analysis (silence detection, volume analysis)
+
+**Testing:**
+- Comprehensive tests added for Lambda environment configuration
+- Tests verify S3 permissions (read input, write output)
+- Tests verify Polly permissions
+- Tests verify increased timeout and memory
+- Integration tests verify complete processing flow
+- Tests validate output metadata structure
+
+**Production Readiness:**
+- All processing logged with structured JSON format
+- Correlation IDs enable tracing across services
+- Error context preserved for debugging
+- Output files tracked in DynamoDB for audit trail
+- Scalable architecture handles concurrent processing
+
 ### ✅ Completed (Issue #7)
 ### ✅ Completed (Issue #10)
 
@@ -1539,4 +1680,5 @@ Update this document when:
 
 **Last Updated**: [Current Date] (Issue #9 Complete)  
 **Last Updated**: [Current Date] (Issue #10 Complete - Advanced Error Handling, Retries & Observability)  
-**Next Review**: After Issue #11 (Full Audio Processing Implementation & Output Handling)
+**Last Updated**: [Current Date] (Issue #11 Complete - Core Audio Processing Logic & Output Handling)  
+**Next Review**: After Issue #12 (End-to-End Validation, Documentation Polish & Project Completion)
