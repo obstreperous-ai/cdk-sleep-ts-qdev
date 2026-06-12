@@ -1343,4 +1343,121 @@ describe('CdkBaseStack', () => {
       });
     });
   });
+
+  describe('Issue #12: End-to-End Validation & Pipeline Completion', () => {
+    describe('Complete Pipeline End-to-End Validation', () => {
+      test('All pipeline components are wired for complete flow', () => {
+        // Verify the entire pipeline is wired correctly from input to output
+        const resources = template.toJSON().Resources;
+        
+        // 1. Input S3 bucket with EventBridge enabled
+        expect(Object.values(resources).filter((r: any) => 
+          r.Type === 'AWS::S3::Bucket' && 
+          r.Properties?.NotificationConfiguration?.EventBridgeConfiguration?.EventBridgeEnabled
+        ).length).toBeGreaterThan(0);
+        
+        // 2. EventBridge rule with state machine target
+        const eventRules = Object.values(resources).filter((r: any) => r.Type === 'AWS::Events::Rule');
+        expect(eventRules.length).toBeGreaterThan(0);
+        
+        // 3. State machine exists
+        const stateMachines = Object.values(resources).filter((r: any) => r.Type === 'AWS::StepFunctions::StateMachine');
+        expect(stateMachines.length).toBe(1);
+        
+        // 4. Lambda function exists
+        const lambdaFunctions = Object.values(resources).filter((r: any) => r.Type === 'AWS::Lambda::Function');
+        expect(lambdaFunctions.length).toBeGreaterThan(0);
+        
+        // 5. DynamoDB table exists
+        const dynamoTables = Object.values(resources).filter((r: any) => r.Type === 'AWS::DynamoDB::Table');
+        expect(dynamoTables.length).toBe(1);
+        
+        // 6. SNS topics exist (success and failure)
+        const snsTopics = Object.values(resources).filter((r: any) => r.Type === 'AWS::SNS::Topic');
+        expect(snsTopics.length).toBe(2);
+        
+        // 7. Output S3 bucket exists
+        const s3Buckets = Object.values(resources).filter((r: any) => r.Type === 'AWS::S3::Bucket');
+        expect(s3Buckets.length).toBe(2); // Input and Output
+      });
+
+      test('State machine definition validates complete success path', () => {
+        const definitionString = template.toJSON().Resources;
+        const stateMachine = Object.values(definitionString).find(
+          (resource: any) => resource.Type === 'AWS::StepFunctions::StateMachine'
+        ) as any;
+        
+        expect(stateMachine).toBeDefined();
+        const definition = JSON.parse(stateMachine.Properties.DefinitionString);
+        
+        // Validate complete success path exists
+        const successPath = [
+          'WriteInitialMetadata',
+          'ProcessAudioMetadata',
+          'UpdateMetadataCompleted',
+          'PublishSuccessNotification'
+        ];
+        
+        successPath.forEach(stateName => {
+          expect(definition.States[stateName]).toBeDefined();
+        });
+        
+        // Validate state transitions
+        expect(definition.States['WriteInitialMetadata'].Next).toBe('ProcessAudioMetadata');
+        expect(definition.States['ProcessAudioMetadata'].Next).toBe('UpdateMetadataCompleted');
+        expect(definition.States['UpdateMetadataCompleted'].Next).toBe('PublishSuccessNotification');
+      });
+
+      test('State machine definition validates complete error path', () => {
+        const definitionString = template.toJSON().Resources;
+        const stateMachine = Object.values(definitionString).find(
+          (resource: any) => resource.Type === 'AWS::StepFunctions::StateMachine'
+        ) as any;
+        
+        expect(stateMachine).toBeDefined();
+        const definition = JSON.parse(stateMachine.Properties.DefinitionString);
+        
+        // Validate complete error path exists
+        const errorPath = [
+          'UpdateMetadataFailed',
+          'PublishFailureNotification',
+          'JobFailed'
+        ];
+        
+        errorPath.forEach(stateName => {
+          expect(definition.States[stateName]).toBeDefined();
+        });
+        
+        // Validate error state transitions
+        expect(definition.States['UpdateMetadataFailed'].Next).toBe('PublishFailureNotification');
+        expect(definition.States['PublishFailureNotification'].Next).toBe('JobFailed');
+        expect(definition.States['JobFailed'].Type).toBe('Fail');
+      });
+
+      test('Error handling: Tasks have catch blocks routing to error handler', () => {
+        const definitionString = template.toJSON().Resources;
+        const stateMachine = Object.values(definitionString).find(
+          (resource: any) => resource.Type === 'AWS::StepFunctions::StateMachine'
+        ) as any;
+        
+        expect(stateMachine).toBeDefined();
+        const definition = JSON.parse(stateMachine.Properties.DefinitionString);
+        
+        // Validate ProcessAudioMetadata has error handling
+        expect(definition.States['ProcessAudioMetadata'].Catch).toBeDefined();
+        expect(definition.States['ProcessAudioMetadata'].Catch[0].Next).toBe('UpdateMetadataFailed');
+        expect(definition.States['ProcessAudioMetadata'].Catch[0].ErrorEquals).toContain('States.ALL');
+      });
+
+      test('Pipeline is ready for deployment: all resources validate', () => {
+        // Final validation: the entire stack should synthesize without errors
+        expect(() => {
+          const synthApp = new cdk.App();
+          const synthStack = new CdkBase.CdkBaseStack(synthApp, 'ValidationStack');
+          Template.fromStack(synthStack);
+          synthApp.synth();
+        }).not.toThrow();
+      });
+    });
+  });
 });

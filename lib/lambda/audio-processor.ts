@@ -69,6 +69,25 @@ export interface AudioProcessorOutput {
 
 /**
  * Structured logging helper - logs in JSON format for better CloudWatch Insights queries
+ * Helper to convert stream to buffer
+ */
+async function streamToBuffer(stream: any): Promise<Buffer> {
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of stream) {
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+/**
+ * Helper to convert stream to string
+ */
+async function streamToString(stream: any): Promise<string> {
+  const buffer = await streamToBuffer(stream);
+  return buffer.toString('utf-8');
+}
+
+/**
  */
 function logStructured(level: 'INFO' | 'ERROR' | 'WARN', message: string, context: any = {}) {
   const logEntry = {
@@ -85,22 +104,9 @@ function logStructured(level: 'INFO' | 'ERROR' | 'WARN', message: string, contex
 
 export const handler = async (event: AudioProcessorInput): Promise<AudioProcessorOutput> => {
 /**
- * Helper to convert stream to buffer
+ * Main Lambda handler function - processes audio files from input to output
  */
-async function streamToBuffer(stream: any): Promise<Buffer> {
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of stream) {
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks);
-}
-
-async function streamToString(stream: any): Promise<string> {
-  const buffer = await streamToBuffer(stream);
-  return buffer.toString('utf-8');
-}
-
-  const requestContext = {
+/**
     requestId: event.executionId,
     executionId: event.executionId,
     status: 'STARTED',
@@ -178,7 +184,6 @@ async function streamToString(stream: any): Promise<string> {
     });
 
     // Return enriched metadata
-    // Process the file based on type
     const isText = SUPPORTED_TEXT_EXTENSIONS.some(ext => event.key.toLowerCase().endsWith(ext));
     let audioBuffer: Buffer;
     let outputFilename: string;
@@ -254,8 +259,9 @@ async function streamToString(stream: any): Promise<string> {
     await dynamoDBClient.send(updateCmd);
 
       success: true,
+    // Return structured output
+    const output: AudioProcessorOutput = {
       message: 'Audio metadata processed successfully',
-      message: 'Audio processed successfully',
       outputBucket: OUTPUT_BUCKET,
       outputKey: outputFilename,
       fileSize: audioBuffer.length,
@@ -265,7 +271,6 @@ async function streamToString(stream: any): Promise<string> {
         key: event.key,
         size: event.size,
         status: 'COMPLETED'
-    };
 
     logStructured('INFO', 'Audio processing completed successfully', {
       ...requestContext,
