@@ -1675,11 +1675,12 @@ Update this document when:
 - **[.github/AGENT_GUIDELINES.md](.github/AGENT_GUIDELINES.md)**: TDD principles and development workflow
 - **[CONTRIBUTING.md](CONTRIBUTING.md)**: Contribution guidelines and PR process
 - **[README.md](README.md)**: Project overview and getting started guide
+- **[EXPERIMENT.md](EXPERIMENT.md)**: Comprehensive experiment design and methodology
 - **[META-PROMPTS.md](META-PROMPTS.md)**: Reusable patterns for agentic TDD IaC projects
 - **[SUMMARY.md](SUMMARY.md)**: Project summary and key decisions
 
 ---
+**Last Updated**: Issue #14 Complete (Experiment Design Documentation)  
+**Next Review**: Issue #15 (Code Quality, Coverage & Reflection)
 
-**Last Updated**: Issue #13 Complete (Documentation Enhancement & Meta-Prompting Extraction)  
-**Next Review**: Issue #14 (Experiment Design Documentation)
 **Next Review**: After Issue #12 (End-to-End Validation, Documentation Polish & Project Completion)
