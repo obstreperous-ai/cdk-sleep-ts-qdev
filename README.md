@@ -93,7 +93,7 @@ After 13 issues (#1-#13) and multiple iterations:
 - ✅ **Reusable Patterns Emerged**: Meta-prompts extracted for future projects (see [META-PROMPTS.md](./META-PROMPTS.md))
 
 See **[SUMMARY.md](./SUMMARY.md)** for complete project summary and **[META-PROMPTS.md](./META-PROMPTS.md)** for reusable patterns.
-
+See **[EXPERIMENT.md](./EXPERIMENT.md)** for comprehensive experiment design documentation, **[SUMMARY.md](./SUMMARY.md)** for project summary, and **[META-PROMPTS.md](./META-PROMPTS.md)** for reusable patterns.
 ---
 
 
@@ -148,7 +148,8 @@ See **[ARCHITECTURE.md](./ARCHITECTURE.md)** for detailed system design and Merm
 ├── CONTRIBUTING.md         # Development workflow and guidelines
 ├── SUMMARY.md              # Project summary and key decisions
 ├── META-PROMPTS.md         # Reusable patterns for agentic TDD IaC
-└── README.md               # This file
+├── META-PROMPTS.md         # Reusable patterns for agentic TDD IaC
+├── EXPERIMENT.md           # Comprehensive experiment design and methodology
 ```
 
 ## Getting Started
@@ -311,6 +312,7 @@ npx cdk deploy
 ## Documentation
 
 - **[ARCHITECTURE.md](./ARCHITECTURE.md)** - System design, data flow, and Mermaid diagrams  
+- **[EXPERIMENT.md](./EXPERIMENT.md)** - Comprehensive experiment design, methodology, and results 🆕  
 - **[CONTRIBUTING.md](./CONTRIBUTING.md)** - TDD workflow, testing standards, and PR process  
 - **[.github/AGENT_GUIDELINES.md](./.github/AGENT_GUIDELINES.md)** - AI agent development persona  
 - **[META-PROMPTS.md](./META-PROMPTS.md)** - Reusable patterns for agentic TDD IaC projects  
