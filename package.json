@@ -4,7 +4,8 @@
   "scripts": {
     "build": "tsc",
     "watch": "tsc -w",
-    "test": "jest",
+    "test": "jest --coverage",
+    "test:unit": "jest --testPathPattern=test/lambda",
     "cdk": "cdk"
   },
   "devDependencies": {
@@ -12,6 +13,7 @@
     "@types/node": "^24.10.1",
     "jest": "^30",
     "ts-jest": "^29",
+    "aws-sdk-client-mock": "^4.0.0",
     "aws-cdk": "2.1121.0",
     "ts-node": "^10.9.2",
     "typescript": "~5.9.3"

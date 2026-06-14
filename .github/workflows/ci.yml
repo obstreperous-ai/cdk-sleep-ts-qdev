@@ -24,7 +24,14 @@ jobs:
         run: npm ci
       
       - name: Run tests
-        run: npm test
+        run: npm test -- --coverage
+      
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          files: ./coverage/coverage-final.json
+          flags: unittests
       
       - name: Build TypeScript
         run: npm run build
