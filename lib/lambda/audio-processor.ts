@@ -88,6 +88,7 @@ async function streamToString(stream: any): Promise<string> {
 }
 
 /**
+ * Structured logging helper - logs in JSON format for better CloudWatch Insights queries
  */
 function logStructured(level: 'INFO' | 'ERROR' | 'WARN', message: string, context: any = {}) {
   const logEntry = {
@@ -102,11 +103,11 @@ function logStructured(level: 'INFO' | 'ERROR' | 'WARN', message: string, contex
   console.log(JSON.stringify(logEntry));
 }
 
-export const handler = async (event: AudioProcessorInput): Promise<AudioProcessorOutput> => {
 /**
  * Main Lambda handler function - processes audio files from input to output
  */
-/**
+export const handler = async (event: AudioProcessorInput): Promise<AudioProcessorOutput> => {
+  const requestContext = {
     requestId: event.executionId,
     executionId: event.executionId,
     status: 'STARTED',
@@ -183,7 +184,6 @@ export const handler = async (event: AudioProcessorInput): Promise<AudioProcesso
       fileSize: event.size,
     });
 
-    // Return enriched metadata
     const isText = SUPPORTED_TEXT_EXTENSIONS.some(ext => event.key.toLowerCase().endsWith(ext));
     let audioBuffer: Buffer;
     let outputFilename: string;
@@ -242,7 +242,6 @@ export const handler = async (event: AudioProcessorInput): Promise<AudioProcesso
     });
     await s3Client.send(putCmd);
 
-    // Update database with output info
     const updateCmd = new UpdateItemCommand({
       TableName: TABLE_NAME,
       Key: { audioId: { S: event.executionId }, createdAt: { S: event.timestamp } },
@@ -258,19 +257,21 @@ export const handler = async (event: AudioProcessorInput): Promise<AudioProcesso
     });
     await dynamoDBClient.send(updateCmd);
 
-      success: true,
     // Return structured output
     const output: AudioProcessorOutput = {
+      success: true,
       message: 'Audio metadata processed successfully',
       outputBucket: OUTPUT_BUCKET,
       outputKey: outputFilename,
       fileSize: audioBuffer.length,
+      metadata: {
         audioId: event.executionId,
         processingTimestamp: new Date().toISOString(),
         bucket: event.bucket,
         key: event.key,
-        size: event.size,
         status: 'COMPLETED'
+      }
+    };
 
     logStructured('INFO', 'Audio processing completed successfully', {
       ...requestContext,
