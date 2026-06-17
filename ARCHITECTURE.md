@@ -144,6 +144,38 @@ flowchart LR
 - 🔄 Retry indicators: Configured retry policies
 - 🔥 Catch indicators: Error handling paths
 - ⚡ Exponential backoff enabled
+### Test-Driven Development Workflow Diagram
+
+This diagram illustrates the strict TDD process followed throughout the project:
+
+```mermaid
+flowchart TD
+    A[Start: GitHub Issue Created] --> B[Read ARCHITECTURE.md]
+    B --> C[Write Failing Tests]
+    C --> D{Tests Fail<br/>Correctly?}
+    D -->|No| C
+    D -->|Yes| E[Write Minimal<br/>Infrastructure Code]
+    E --> F{Tests Pass?}
+    F -->|No| E
+    F -->|Yes| G[Refactor Code]
+    G --> H[Run Tests Again]
+    H --> I{Still Pass?}
+    I -->|No| G
+    I -->|Yes| J[Update ARCHITECTURE.md]
+    J --> K[Update Mermaid Diagrams]
+    K --> L[Update README if needed]
+    L --> M[Commit Changes]
+    M --> N[Open Pull Request]
+    N --> O[CI Runs Tests]
+    O --> P{All Checks Pass?}
+    P -->|No| E
+    P -->|Yes| Q[Merge to Main]
+    Q --> R[End: Feature Complete]
+    
+    style C fill:#ffeb3b,stroke:#f57c00,stroke-width:2px
+    style E fill:#90EE90,stroke:#228B22,stroke-width:2px
+    style J fill:#ADD8E6,stroke:#4682B4,stroke-width:2px
+```
 ### End-to-End Data Flow (Issue #8)
 
 #### Success Path:
