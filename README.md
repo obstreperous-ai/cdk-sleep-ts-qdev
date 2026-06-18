@@ -340,7 +340,7 @@ Every pull request automatically runs:
 - ✅ Infrastructure diff (`npx cdk diff`)
 
 See [.github/workflows/ci.yml](./.github/workflows/ci.yml) for details.
-## Troubleshooting
+- **[EXPERIMENT.md](./EXPERIMENT.md)** - Comprehensive experiment design, methodology, and results ⭐  
 ---
 
 
